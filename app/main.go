@@ -83,6 +83,44 @@ func verify(b []byte,m manifest) error{
  if e!=nil||len(b)<2||string(b[:2])!="MZ"||!bytes.Equal(h[:],want){return errors.New("Integridade do executável inválida")}
  return nil
 }
+const uiFeed = "https://raw.githubusercontent.com/Lawater13/Printei/main/ui-update.json"
+type uiPackage struct { Version string `json:"version"`; Core string `json:"core"`; Commit string `json:"commit"`; SHA string `json:"sha256"`; HTML string `json:"html,omitempty"` }
+var uiMu sync.RWMutex
+var uiCurrent uiPackage
+var uiDir string
+var commitPattern=regexp.MustCompile("^[a-f0-9]{40}$")
+func uiValid(p uiPackage)bool{
+ h,e:=hex.DecodeString(p.SHA)
+ return p.Core==version&&verPattern.MatchString(p.Version)&&newer(p.Version,version)&&commitPattern.MatchString(p.Commit)&&e==nil&&len(h)==32
+}
+func uiVerify(p uiPackage)bool{
+ h:=sha256.Sum256([]byte(p.HTML))
+ return uiValid(p)&&hex.EncodeToString(h[:])==p.SHA&&strings.HasPrefix(p.HTML,"<!doctype html>")&&strings.HasSuffix(strings.TrimSpace(p.HTML),"</html>")
+}
+func loadUI(){
+ b,e:=os.ReadFile(filepath.Join(uiDir,"interface.json"));if e!=nil{return}
+ var p uiPackage;if json.Unmarshal(b,&p)==nil&&uiVerify(p){uiCurrent=p}
+}
+func uiVersion()string{uiMu.RLock();defer uiMu.RUnlock();if uiCurrent.Version!=""{return uiCurrent.Version};return version}
+func checkUI()(uiPackage,error){
+ var p uiPackage
+ b,e:=get(uiFeed+"?t="+strconv.FormatInt(time.Now().Unix(),10),16384);if e!=nil{return p,e}
+ if e=json.Unmarshal(b,&p);e!=nil{return p,e}
+ if !uiValid(p){return uiPackage{},nil};return p,nil
+}
+func installUI(p uiPackage)error{
+ if !uiValid(p)||!newer(p.Version,uiVersion()){return errors.New("Interface incompatível")}
+ b,e:=get("https://raw.githubusercontent.com/Lawater13/Printei/"+p.Commit+"/app/index.html",4<<20);if e!=nil{return e}
+ p.HTML=string(b);if !uiVerify(p){return errors.New("Integridade da interface inválida")}
+ if e=os.MkdirAll(uiDir,0700);e!=nil{return e}
+ data,e:=json.Marshal(p);if e!=nil{return e}
+ uiMu.Lock();defer uiMu.Unlock()
+ target:=filepath.Join(uiDir,"interface.json")
+ if old,e:=os.ReadFile(target);e==nil{if e=os.WriteFile(target+".bak",old,0600);e!=nil{return e}}
+ f,e:=os.CreateTemp(uiDir,"interface-*.tmp");if e!=nil{return e};defer os.Remove(f.Name())
+ _,e=f.Write(data);closeErr:=f.Close();if e!=nil{return e};if closeErr!=nil{return closeErr}
+ if e=os.Rename(f.Name(),target);e!=nil{return e};uiCurrent=p;return nil
+}
 var updating atomic.Bool
 func install(m manifest) error {
  if e:=valid(m);e!=nil{return e}
@@ -139,7 +177,7 @@ var lastSeen atomic.Int64
 const buttonScript = `<script>(function(){
 const b=document.getElementById('updateCheck');if(!b)return;
 async function request(path){const r=await fetch(path,{method:'POST',headers:{'X-Printei-Update':'1'},cache:'no-store'});const d=await r.json();if(!r.ok||d.error)throw Error(d.error||'Falha na atualização');return d}
-b.onclick=async()=>{b.disabled=true;b.textContent='Verificando…';try{const m=await request('/update/check');if(!m.available){alert('Você já está na versão '+m.current+'.');return}if(!await confirmPrintei('Printei '+m.version+' disponível. Deseja baixar e reiniciar agora?'))return;b.textContent='Baixando…';await request('/update/install');b.textContent='Reiniciando…';alert('Atualização verificada. O Printei será reaberto. Se a janela antiga permanecer, feche apenas essa janela.');try{window.close()}catch{} }catch(e){alert('Não foi possível atualizar: '+e.message)}finally{b.disabled=false;b.textContent='↻ Atualizar'}};
+b.onclick=async()=>{b.disabled=true;b.textContent='Verificando…';try{const m=await request('/update/check');if(!m.available){alert('Você já está na versão '+m.current+'.');return}if(!await confirmPrintei('Printei '+m.version+' disponível. Deseja atualizar agora?'))return;b.textContent='Baixando…';const result=await request('/update/install');if(result.light){window.location.reload();return}b.textContent='Reiniciando…';alert('Atualização verificada. O Printei será reaberto. Se a janela antiga permanecer, feche apenas essa janela.');try{window.close()}catch{} }catch(e){alert('Não foi possível atualizar: '+e.message)}finally{b.disabled=false;b.textContent='↻ Atualizar'}};
 setTimeout(async()=>{try{let m=await request('/update/check');if(m.available&&!b.disabled)b.textContent='↻ Atualizar • '+m.version}catch{}},3000);
 setInterval(()=>fetch('/status',{cache:'no-store'}).catch(()=>{}),20000);
 })();</script>`
@@ -162,12 +200,19 @@ func serve(w http.ResponseWriter,r *http.Request){
   if !authorized(r,"X-Printei-Update"){http.Error(w,"Acesso negado",403);return}
   if r.URL.Path=="/update/install"&&!updating.CompareAndSwap(false,true){fail(w,errors.New("Atualização em andamento"));return}
   m,e:=check()
-  if r.URL.Path=="/update/check"{if e!=nil{fail(w,e);return};reply(w,map[string]any{"current":version,"version":m.Version,"available":newer(m.Version,version)});return}
+  if e==nil&&!newer(m.Version,version){
+   p,ue:=checkUI()
+   if ue!=nil{e=ue}else if newer(p.Version,uiVersion()){
+    if r.URL.Path=="/update/check"{reply(w,map[string]any{"current":uiVersion(),"version":p.Version,"available":true,"light":true});return}
+    e=installUI(p);updating.Store(false);if e!=nil{fail(w,e);return};reply(w,map[string]bool{"ok":true,"light":true});return
+   }
+  }
+  if r.URL.Path=="/update/check"{if e!=nil{fail(w,e);return};reply(w,map[string]any{"current":uiVersion(),"version":m.Version,"available":newer(m.Version,version)});return}
   if e==nil{e=install(m)}
   if e!=nil{updating.Store(false);fail(w,e);return}
   reply(w,map[string]bool{"ok":true});if f,ok:=w.(http.Flusher);ok{f.Flush()};go func(){time.Sleep(2*time.Second);os.Exit(0)}();return
  case "/","/index.html":
-  b,_:=assets.ReadFile("index.html");html:=strings.ReplaceAll(string(b),"Printei v6.2 Portable","Printei v"+version+" Portable");html=strings.Replace(html,"</html>",buttonScript+"</html>",1);w.Header().Set("Content-Type","text/html; charset=utf-8");_,_=io.WriteString(w,html);return
+  b,_:=assets.ReadFile("index.html");uiMu.RLock();if uiCurrent.HTML!=""{b=[]byte(uiCurrent.HTML)};uiMu.RUnlock();html:=strings.ReplaceAll(string(b),"Printei v6.2 Portable","Printei v"+uiVersion()+" Portable");html=strings.Replace(html,"</html>",buttonScript+"</html>",1);w.Header().Set("Content-Type","text/html; charset=utf-8");_,_=io.WriteString(w,html);return
  case "/logo.svg","/icon-512.png","/icon-192.png","/favicon.ico":
   b,_:=assets.ReadFile("logo.svg");w.Header().Set("Content-Type","image/svg+xml");_,_=w.Write(b);return
  case "/manifest.webmanifest":
@@ -183,6 +228,7 @@ func main(){
  if len(os.Args)==6&&os.Args[1]=="--apply-update"{if e:=applyUpdate(os.Args[2],os.Args[3],os.Args[4],os.Args[5]);e!=nil{notice("Atualização não instalada: "+e.Error(),16)};return}
  if len(os.Args)==2&&os.Args[1]=="--version"{fmt.Println(version);return}
  root:=os.Getenv("LOCALAPPDATA");if root==""{notice("LOCALAPPDATA indisponível.",16);return}
+ uiDir=filepath.Join(root,"Printei","Interface");loadUI()
  profile:=filepath.Join(root,"Printei","Perfil")
  if e:=os.MkdirAll(profile,0700);e!=nil{notice(e.Error(),16);return}
  edge:=edgePath();if edge==""{notice("Microsoft Edge não encontrado.",16);return}
