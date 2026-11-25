@@ -94,13 +94,14 @@ func install(m manifest) error {
  next:=filepath.Join(stage,"next.exe");helper:=filepath.Join(stage,"helper.exe")
  if e=os.WriteFile(next,b,0600);e!=nil{return e}
  old,e:=os.ReadFile(self);if e!=nil{return e};if e=os.WriteFile(helper,old,0600);e!=nil{return e}
- if e=exec.Command(helper,"--apply-update",self,m.Version,m.SHA).Start();e!=nil{return e};success=true
+ if e=exec.Command(helper,"--apply-update",self,m.Version,m.SHA,strconv.Itoa(os.Getpid())).Start();e!=nil{return e};success=true
  return nil
 }
-func applyUpdate(target,newVersion,sha string)error{
+func applyUpdate(target,newVersion,sha,parentPID string)error{
  self,e:=os.Executable();if e!=nil{return e}
  stage:=filepath.Dir(self)
  if filepath.Dir(stage)!=filepath.Dir(target)||!strings.HasPrefix(filepath.Base(stage),".printei-update-")||!verPattern.MatchString(newVersion){return errors.New("Pasta de atualização inválida")}
+ pid,e:=strconv.ParseUint(parentPID,10,32);if e!=nil{return e};h,e:=syscall.OpenProcess(0x00100000,false,uint32(pid));if e==nil{defer syscall.CloseHandle(h);status,e:=syscall.WaitForSingleObject(h,30000);if e!=nil||status!=0{return errors.New("A versão anterior não encerrou")}}else if e!=syscall.Errno(87){return e}
  next:=filepath.Join(stage,"next.exe");b,e:=os.ReadFile(next);if e!=nil{return e}
  if e=verify(b,manifest{SHA:sha});e!=nil{return e}
  bak:=target+".bak";_ = os.Remove(bak)
@@ -139,6 +140,7 @@ const buttonScript = `<script>(function(){
 const b=document.getElementById('updateCheck');if(!b)return;
 async function request(path){const r=await fetch(path,{method:'POST',headers:{'X-Printei-Update':'1'},cache:'no-store'});const d=await r.json();if(!r.ok||d.error)throw Error(d.error||'Falha na atualização');return d}
 b.onclick=async()=>{b.disabled=true;b.textContent='Verificando…';try{const m=await request('/update/check');if(!m.available){alert('Você já está na versão '+m.current+'.');return}if(!await confirmPrintei('Printei '+m.version+' disponível. Deseja baixar e reiniciar agora?'))return;b.textContent='Baixando…';await request('/update/install');b.textContent='Reiniciando…';alert('Atualização verificada. O Printei será reaberto. Se a janela antiga permanecer, feche apenas essa janela.');try{window.close()}catch{} }catch(e){alert('Não foi possível atualizar: '+e.message)}finally{b.disabled=false;b.textContent='↻ Atualizar'}};
+setTimeout(async()=>{try{let m=await request('/update/check');if(m.available&&!b.disabled)b.textContent='↻ Atualizar • '+m.version}catch{}},3000);
 setInterval(()=>fetch('/status',{cache:'no-store'}).catch(()=>{}),20000);
 })();</script>`
 func serve(w http.ResponseWriter,r *http.Request){
@@ -178,7 +180,7 @@ func edgePath()string{
  return ""
 }
 func main(){
- if len(os.Args)==5&&os.Args[1]=="--apply-update"{if e:=applyUpdate(os.Args[2],os.Args[3],os.Args[4]);e!=nil{notice("Atualização não instalada: "+e.Error(),16)};return}
+ if len(os.Args)==6&&os.Args[1]=="--apply-update"{if e:=applyUpdate(os.Args[2],os.Args[3],os.Args[4],os.Args[5]);e!=nil{notice("Atualização não instalada: "+e.Error(),16)};return}
  if len(os.Args)==2&&os.Args[1]=="--version"{fmt.Println(version);return}
  root:=os.Getenv("LOCALAPPDATA");if root==""{notice("LOCALAPPDATA indisponível.",16);return}
  profile:=filepath.Join(root,"Printei","Perfil")
