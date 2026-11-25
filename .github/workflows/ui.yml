@@ -1,0 +1,41 @@
+name: Publicar interface rápida
+on:
+  push:
+    branches: [main]
+    paths: [ui-request.json]
+permissions:
+  contents: write
+concurrency:
+  group: printei-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar e publicar interface
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, subprocess, tempfile, json
+          html = pathlib.Path("app/index.html").read_text(encoding="utf-8")
+          assert html.startswith("<!doctype html>") and html.rstrip().endswith("</html>")
+          with tempfile.TemporaryDirectory() as directory:
+              for i, script in enumerate(re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, re.S)):
+                  path = pathlib.Path(directory) / f"script-{i}.js"
+                  path.write_text(script, encoding="utf-8")
+                  subprocess.run(["node", "--check", str(path)], check=True)
+          PY
+          version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+$"))' ui-request.json)
+          core=$(jq -er '.version' update.json)
+          python3 - "$version" "$core" <<'PY'
+          import sys
+          assert tuple(map(int,sys.argv[1].split("."))) > tuple(map(int,sys.argv[2].split(".")))
+          PY
+          sha=$(sha256sum app/index.html | cut -d' ' -f1)
+          jq -n --arg version "$version" --arg core "$core" --arg commit "$GITHUB_SHA" --arg sha "$sha" '{version:$version,core:$core,commit:$commit,sha256:$sha}' > ui-update.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ui-update.json
+          git commit -m "Publicar interface V$version"
+          git push origin HEAD:main
