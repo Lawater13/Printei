@@ -1,0 +1,36 @@
+name: Publicar Printei
+on:
+  push:
+    branches: [main]
+    paths: [release-request.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: printei-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparar atualização
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+$"))' release-request.json)
+          base=$(jq -er '.base | select(test("^[0-9]+\\.[0-9]+$"))' release-request.json)
+          mkdir -p dist
+          gh release download "v$base" --pattern "Printei-V$base-Portable.exe" --dir dist
+          python3 build-update.py "dist/Printei-V$base-Portable.exe" "dist/Printei-V$version-Portable.exe" "$version"
+          asset="Printei-V$version-Portable.exe"
+          gh release create "v$version" "dist/$asset" --title "Printei V$version" --notes-file release-notes.md --target "$GITHUB_SHA"
+          sha=$(sha256sum "dist/$asset" | cut -d' ' -f1)
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/$asset"
+          jq -n --arg version "$version" --arg url "$url" --arg sha "$sha" '{version:$version,url:$url,sha256:$sha}' > update.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          git commit -m "Disponibilizar Printei V$version"
+          git push origin main
