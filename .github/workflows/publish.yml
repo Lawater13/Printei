@@ -1,4 +1,4 @@
-name: Publicar Printei
+name: Compilar e publicar Printei
 on:
   push:
     branches: [main]
@@ -11,26 +11,49 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Preparar atualização
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - name: Validar interface e código
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib, re, subprocess, tempfile
+          html = pathlib.Path("app/index.html").read_text(encoding="utf-8")
+          assert html.startswith("<!doctype html>") and html.rstrip().endswith("</html>")
+          with tempfile.TemporaryDirectory() as directory:
+              for i, script in enumerate(re.findall(r"<script(?:\\s[^>]*)?>(.*?)</script>", html, re.S)):
+                  path = pathlib.Path(directory) / f"script-{i}.js"
+                  path.write_text(script, encoding="utf-8")
+                  subprocess.run(["node", "--check", str(path)], check=True)
+          PY
+          cd app
+          go test main.go main_test.go
+      - name: Compilar e publicar
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+$"))' release-request.json)
-          base=$(jq -er '.base | select(test("^[0-9]+\\.[0-9]+$"))' release-request.json)
           mkdir -p dist
-          gh release download "v$base" --pattern "Printei-V$base-Portable.exe" --dir dist
-          python3 build-update.py "dist/Printei-V$base-Portable.exe" "dist/Printei-V$version-Portable.exe" "$version"
           asset="Printei-V$version-Portable.exe"
-          gh release create "v$version" "dist/$asset" --title "Printei V$version" --notes-file release-notes.md --target "$GITHUB_SHA"
+          (cd app; CGO_ENABLED=0 GOARCH=amd64 go build -trimpath -ldflags="-H windowsgui -s -w -X main.version=$version" -o "../dist/$asset" main.go)
+          test -s "dist/$asset"
           sha=$(sha256sum "dist/$asset" | cut -d' ' -f1)
+          gh release create "v$version" "dist/$asset" --title "Printei V$version" --notes-file release-notes.md --target "$GITHUB_SHA"
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/$asset"
+          curl --fail --location --retry 4 --output dist/verify.exe "$url"
+          test "$(sha256sum dist/verify.exe | cut -d' ' -f1)" = "$sha"
           jq -n --arg version "$version" --arg url "$url" --arg sha "$sha" '{version:$version,url:$url,sha256:$sha}' > update.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add update.json
           git commit -m "Disponibilizar Printei V$version"
-          git push origin main
+          git push origin HEAD:main
