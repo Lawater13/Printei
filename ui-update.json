@@ -1,1 +1,6 @@
-{}
+{
+  "version": "7.3",
+  "core": "7.2",
+  "commit": "417ccb748f11c887962a2257368a48a8087d46ea",
+  "sha256": "2e8be7892880fe36e23a2c3ce2e112bacae1467f0bcf4672087bd5e577b9d449"
+}
