@@ -12,3 +12,11 @@ func TestHash(t *testing.T){
  b:=[]byte("MZtest");h:=sha256.Sum256(b);m:=manifest{SHA:hex.EncodeToString(h[:])}
  if verify(b,m)!=nil{t.Fatal("valid hash rejected")};if verify([]byte("MZchanged"),m)==nil{t.Fatal("invalid hash accepted")}
 }
+
+func TestUI(t *testing.T){
+ html:="<!doctype html><html>teste</html>";h:=sha256.Sum256([]byte(html))
+ p:=uiPackage{Version:"7.3",Core:version,Commit:strings.Repeat("a",40),SHA:hex.EncodeToString(h[:]),HTML:html}
+ if !uiVerify(p){t.Fatal("valid interface rejected")}
+ p.HTML+="changed";if uiVerify(p){t.Fatal("invalid interface accepted")}
+ p.HTML=html;p.Core="6.0";if uiVerify(p){t.Fatal("incompatible core accepted")}
+}
