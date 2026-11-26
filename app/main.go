@@ -29,8 +29,8 @@ import (
 var assets embed.FS
 
 var version = "7.0"
-const origin = "http://127.0.0.1:43871"
-const addr = "127.0.0.1:43871"
+const origin = "http://127.0.0.1:43873"
+const addr = "127.0.0.1:43873"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
 const releasePrefix = "https://github.com/Lawater13/Printei/releases/download/"
 var verPattern = regexp.MustCompile("^[0-9]{1,6}\\.[0-9]{1,6}$")
@@ -177,7 +177,6 @@ var lastSeen atomic.Int64
 var pageLifecycle sync.Mutex
 var pageGeneration uint64
 var activePage string
-
 const buttonScript = `<script>(function(){
 const b=document.getElementById('updateCheck');if(!b)return;
 async function request(path){const r=await fetch(path,{method:'POST',headers:{'X-Printei-Update':'1'},cache:'no-store'});const d=await r.json();if(!r.ok||d.error)throw Error(d.error||'Falha na atualização');return d}
@@ -217,6 +216,8 @@ func serve(w http.ResponseWriter,r *http.Request){
   alarms.Lock();alarms.jobs=jobs;ack:=make([]string,0,len(alarms.ack));for k:=range alarms.ack{ack=append(ack,k)};opened:=alarms.open;alarms.open="";alarms.Unlock()
   reply(w,map[string]any{"ack":ack,"open":opened});scan();return
  case "/update/check","/update/install":
+  reply(w,map[string]any{"current":"8.0","available":false});return
+ case "/disabled-experimental-update":
   if !authorized(r,"X-Printei-Update"){http.Error(w,"Acesso negado",403);return}
   if r.URL.Path=="/update/install"&&!updating.CompareAndSwap(false,true){fail(w,errors.New("Atualização em andamento"));return}
   m,e:=check()
@@ -249,8 +250,8 @@ func main(){
  if len(os.Args)==6&&os.Args[1]=="--apply-update"{if e:=applyUpdate(os.Args[2],os.Args[3],os.Args[4],os.Args[5]);e!=nil{notice("Atualização não instalada: "+e.Error(),16)};return}
  if len(os.Args)==2&&os.Args[1]=="--version"{fmt.Println(version);return}
  root:=os.Getenv("LOCALAPPDATA");if root==""{notice("LOCALAPPDATA indisponível.",16);return}
- uiDir=filepath.Join(root,"Printei","Interface");loadUI()
- profile:=filepath.Join(root,"Printei","Perfil")
+ uiDir=filepath.Join(root,"PrinteiCloudSyncTeste","Interface");loadUI()
+ profile:=filepath.Join(root,"PrinteiCloudSyncTeste","Perfil")
  if e:=os.MkdirAll(profile,0700);e!=nil{notice(e.Error(),16);return}
  edge:=edgePath();if edge==""{notice("Microsoft Edge não encontrado.",16);return}
  l,e:=net.Listen("tcp",addr);if e!=nil{notice("Feche a outra versão do Printei antes de abrir esta.",48);return}
