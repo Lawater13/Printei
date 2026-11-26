@@ -174,11 +174,19 @@ func authorized(r *http.Request,header string)bool{
 func reply(w http.ResponseWriter,v any){w.Header().Set("Content-Type","application/json; charset=utf-8");_ = json.NewEncoder(w).Encode(v)}
 func fail(w http.ResponseWriter,e error){w.WriteHeader(400);reply(w,map[string]string{"error":e.Error()})}
 var lastSeen atomic.Int64
+var pageLifecycle sync.Mutex
+var pageGeneration uint64
+var activePage string
 const buttonScript = `<script>(function(){
 const b=document.getElementById('updateCheck');if(!b)return;
 async function request(path){const r=await fetch(path,{method:'POST',headers:{'X-Printei-Update':'1'},cache:'no-store'});const d=await r.json();if(!r.ok||d.error)throw Error(d.error||'Falha na atualização');return d}
 b.onclick=async()=>{b.disabled=true;b.textContent='Verificando…';try{const m=await request('/update/check');if(!m.available){alert('Você já está na versão '+m.current+'.');return}if(!await confirmPrintei('Printei '+m.version+' disponível. Deseja atualizar agora?'))return;b.textContent='Baixando…';const result=await request('/update/install');if(result.light){window.location.reload();return}b.textContent='Reiniciando…';alert('Atualização verificada. O Printei será reaberto. Se a janela antiga permanecer, feche apenas essa janela.');try{window.close()}catch{} }catch(e){alert('Não foi possível atualizar: '+e.message)}finally{b.disabled=false;b.textContent='↻ Atualizar'}};
 setTimeout(async()=>{try{let m=await request('/update/check');if(m.available&&!b.disabled)b.textContent='↻ Atualizar • '+m.version}catch{}},3000);
+const pageID=crypto.randomUUID();
+function lifecycle(action){return fetch('/lifecycle/'+action,{method:'POST',headers:{'X-Printei-Lifecycle':'1','Content-Type':'text/plain'},body:pageID,keepalive:true,cache:'no-store'}).catch(()=>{})}
+lifecycle('open');
+window.addEventListener('pageshow',()=>lifecycle('open'));
+window.addEventListener('pagehide',()=>lifecycle('close'));
 setInterval(()=>fetch('/status',{cache:'no-store'}).catch(()=>{}),20000);
 })();</script>`
 func serve(w http.ResponseWriter,r *http.Request){
@@ -187,6 +195,17 @@ func serve(w http.ResponseWriter,r *http.Request){
  lastSeen.Store(time.Now().Unix())
  switch r.URL.Path{
  case "/status":reply(w,map[string]string{"version":version,"app":"Printei"});return
+ case "/lifecycle/open","/lifecycle/close":
+  if !authorized(r,"X-Printei-Lifecycle")||r.Header.Get("Origin")!=origin{http.Error(w,"Acesso negado",403);return}
+  b,e:=io.ReadAll(io.LimitReader(r.Body,65));if e!=nil||len(b)!=36{http.Error(w,"Sessão inválida",400);return}
+  id:=string(b)
+  pageLifecycle.Lock()
+  if r.URL.Path=="/lifecycle/open"{activePage=id;pageGeneration++}else if activePage==id{
+   pageGeneration++;generation:=pageGeneration
+   go func(){time.Sleep(2*time.Second);pageLifecycle.Lock();defer pageLifecycle.Unlock();if pageGeneration==generation&&activePage==id&&!updating.Load(){os.Exit(0)}}()
+  }
+  pageLifecycle.Unlock()
+  w.WriteHeader(http.StatusNoContent);return
  case "/alarm":
   if !authorized(r,"X-Printei-Alarm"){http.Error(w,"Acesso negado",403);return}
   b,e:=io.ReadAll(io.LimitReader(r.Body,4097));if e!=nil||len(b)>4096{http.Error(w,"Mensagem inválida",400);return}
@@ -214,6 +233,7 @@ func serve(w http.ResponseWriter,r *http.Request){
   if e!=nil{updating.Store(false);fail(w,e);return}
   reply(w,map[string]bool{"ok":true});if f,ok:=w.(http.Flusher);ok{f.Flush()};go func(){time.Sleep(2*time.Second);os.Exit(0)}();return
  case "/","/index.html":
+  pageLifecycle.Lock();pageGeneration++;activePage="";pageLifecycle.Unlock()
   b,_:=assets.ReadFile("index.html");uiMu.RLock();if uiCurrent.HTML!=""{b=[]byte(uiCurrent.HTML)};uiMu.RUnlock();html:=strings.ReplaceAll(string(b),"Printei v6.2 Portable","Printei v"+uiVersion()+" Portable");html=strings.Replace(html,"</html>",buttonScript+"</html>",1);w.Header().Set("Content-Type","text/html; charset=utf-8");_,_=io.WriteString(w,html);return
  case "/logo.svg","/icon-512.png","/icon-192.png","/favicon.ico":
   b,_:=assets.ReadFile("logo.svg");w.Header().Set("Content-Type","image/svg+xml");_,_=w.Write(b);return
@@ -240,7 +260,7 @@ func main(){
  srv:=&http.Server{Handler:http.HandlerFunc(serve),ReadHeaderTimeout:5*time.Second}
  go srv.Serve(l)
  go func(){for range time.NewTicker(time.Second).C{scan()}}()
- cmd:=exec.Command(edge,"--user-data-dir="+profile,"--app="+origin+"/","--no-first-run","--start-maximized")
+ cmd:=exec.Command(edge,"--user-data-dir="+profile,"--app="+origin+"/","--no-first-run","--start-maximized","--disable-background-mode")
  start:=time.Now();if e=cmd.Start();e!=nil{notice(e.Error(),16);return}
  go func(){_ = cmd.Wait();if time.Since(start)>5*time.Second&&!updating.Load(){os.Exit(0)}}()
  for range time.NewTicker(15*time.Second).C{if !updating.Load()&&time.Now().Unix()-lastSeen.Load()>300{return}}
