@@ -1,6 +1,6 @@
 {
-  "version": "7.14",
+  "version": "7.15",
   "core": "7.2",
-  "commit": "aedeac86ff210ad0eb6ae8b898fdef6c1de55c49",
-  "sha256": "925a28a034984b5fe19e84032def258d7cd895f1997b28d67fbddd6edd7ef240"
+  "commit": "c4e283d3a52eead48e1fe8caa9028bc7bfa71a22",
+  "sha256": "c92ad2e48a6a070f4a790098dddbe831ffb66bfda7c2c2f2a240f08c834e7ba3"
 }
