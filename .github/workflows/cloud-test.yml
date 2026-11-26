@@ -4,7 +4,7 @@ on:
     branches: [v8-cloud-test]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -21,3 +21,16 @@ jobs:
         with:
           name: Printei-Cloud-Teste
           path: Printei-Cloud-Teste.exe
+      - name: Publicar prévia experimental
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v8.0-preview.3"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --prerelease --title "Printei V8.0 Experimental - Teste 3" --notes "Login e modo offline aprovados. Sincronização real ainda não disponível. Perfil de teste separado da versão oficial." Printei-Cloud-Teste.exe
+          } else {
+            gh release upload $tag Printei-Cloud-Teste.exe --clobber --repo $env:GITHUB_REPOSITORY
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
