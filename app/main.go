@@ -220,19 +220,8 @@ func serve(w http.ResponseWriter,r *http.Request){
   reply(w,map[string]any{"ack":ack,"open":opened});scan();return
  case "/update/check","/update/install":
   if !authorized(r,"X-Printei-Update"){http.Error(w,"Acesso negado",403);return}
-  if r.URL.Path=="/update/install"&&!updating.CompareAndSwap(false,true){fail(w,errors.New("Atualização em andamento"));return}
-  m,e:=check()
-  if e==nil&&!newer(m.Version,version){
-   p,ue:=checkUI()
-   if ue!=nil{e=ue}else if newer(p.Version,uiVersion()){
-    if r.URL.Path=="/update/check"{reply(w,map[string]any{"current":uiVersion(),"version":p.Version,"available":true,"light":true});return}
-    e=installUI(p);updating.Store(false);if e!=nil{fail(w,e);return};reply(w,map[string]bool{"ok":true,"light":true});return
-   }
-  }
-  if r.URL.Path=="/update/check"{if e!=nil{fail(w,e);return};reply(w,map[string]any{"current":uiVersion(),"version":m.Version,"available":newer(m.Version,version)});return}
-  if e==nil{e=install(m)}
-  if e!=nil{updating.Store(false);fail(w,e);return}
-  reply(w,map[string]bool{"ok":true});if f,ok:=w.(http.Flusher);ok{f.Flush()};go func(){time.Sleep(2*time.Second);os.Exit(0)}();return
+   if r.URL.Path=="/update/check"{reply(w,map[string]any{"current":uiVersion(),"available":false});return}
+  fail(w,errors.New("Atualizações desativadas na versão experimental"));return
  case "/","/index.html":
   pageLifecycle.Lock();pageGeneration++;activePage="";pageLifecycle.Unlock()
   b,_:=assets.ReadFile("index.html");uiMu.RLock();if uiCurrent.HTML!=""{b=[]byte(uiCurrent.HTML)};uiMu.RUnlock();html:=strings.ReplaceAll(string(b),"Printei v6.2 Portable","Printei v"+uiVersion()+" Portable");html=strings.Replace(html,"</html>",buttonScript+"</html>",1);w.Header().Set("Content-Type","text/html; charset=utf-8");_,_=io.WriteString(w,html);return
