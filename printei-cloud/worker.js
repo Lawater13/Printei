@@ -2,7 +2,7 @@ import { connect } from "cloudflare:sockets";
 import { readTelemetry } from "./mqtt.js";
 import { tokenClaims } from "./session.js";
 import { monitorView, normalizeTasks, staleAfterMs } from "./monitor.js";
-import { desktopStatePattern, desktopStart, desktopFinish, desktopGrant, verifyDesktopGrant, verifyAccessAssertion } from "./desktop.js";
+import { desktopStatePattern, desktopStart, desktopFailure, desktopFinish, desktopGrant, verifyDesktopGrant, verifyAccessAssertion } from "./desktop.js";
 import { panel } from "./panel.js";
 
 export { BambuSession } from "./session.js";
@@ -159,9 +159,15 @@ async function privateRoute(request, env, path, url) {
   }
   if (!session) return error("Sessão ausente ou expirada. Entre novamente com o código de e-mail.", 401);
   if (path === "/bambu/session") {
+    const devices = await Promise.all(session.devices.map(async ({ name, model, serial }) => {
+      const identity = encoder.encode(JSON.stringify(["printei-monitor-v1", session.username, serial]));
+      const digest = await crypto.subtle.digest("SHA-256", identity);
+      const monitorId = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      return { name, model, monitorId };
+    }));
     return json({
       expiresAt: new Date(session.expiresAt).toISOString(),
-      devices: session.devices.map(({ name, model }) => ({ name, model }))
+      devices
     });
   }
   const device = Number.isInteger(body.device) ? session.devices[body.device] : null;
@@ -216,16 +222,23 @@ async function privateRoute(request, env, path, url) {
 
 async function desktopRoute(request, env, url) {
   const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
-  if (!env.PRINTEI_ADMIN_KEY || !assertion) return error("Entre pelo Cloudflare Access para conectar.", 403);
+  if (!env.PRINTEI_ADMIN_KEY || !assertion) return desktopFailure("Entre pelo Cloudflare Access para conectar.", 403);
   if (request.method === "GET") {
     const state = url.searchParams.get("state");
-    return desktopStatePattern.test(state ?? "") ? desktopStart(state) : error("Conexão inválida.", 400);
+    return desktopStatePattern.test(state ?? "") ? desktopStart(state)
+      : desktopFailure("O código de conexão do aplicativo está ausente ou é inválido.", 400);
   }
-  if (request.method !== "POST" || request.headers.get("Origin") !== url.origin) return error("Conexão inválida.", 403);
+  if (request.method !== "POST" || request.headers.get("Origin") !== url.origin) {
+    return desktopFailure("O navegador não confirmou a origem do formulário.", 403);
+  }
   const form = await request.formData().catch(() => null);
   const state = form?.get("state");
-  if (typeof state !== "string" || !desktopStatePattern.test(state) ||
-      !await authorized(form?.get("key"), env.PRINTEI_ADMIN_KEY)) return error("Conexão inválida.", 403);
+  if (typeof state !== "string" || !desktopStatePattern.test(state)) {
+    return desktopFailure("O código de conexão do aplicativo está ausente ou é inválido.", 400);
+  }
+  if (!await authorized(form?.get("key"), env.PRINTEI_ADMIN_KEY)) {
+    return desktopFailure("A chave privada do Printei foi recusada.", 403, state);
+  }
   const issuer = env.PRINTEI_ACCESS_ISSUER;
   const accepted = await verifyAccessAssertion(assertion, issuer, env.PRINTEI_ACCESS_AUDIENCE, async () => {
     const keys = await fetch(issuer + "/cdn-cgi/access/certs", {
@@ -233,9 +246,10 @@ async function desktopRoute(request, env, url) {
     });
     return keys.ok ? (await keys.json()).keys : null;
   });
-  if (!accepted) return error("O Worker não confirmou a sessão do Cloudflare Access.", 403);
+  if (!accepted) return desktopFailure("O Worker não confirmou a sessão do Cloudflare Access.", 403, state);
   const grant = await desktopGrant(assertion, env.PRINTEI_ADMIN_KEY);
-  return grant ? desktopFinish(state, assertion, grant) : error("Sessão do Cloudflare Access expirada.", 403);
+  return grant ? desktopFinish(state, assertion, grant)
+    : desktopFailure("A sessão do Cloudflare Access expirou.", 403, state);
 }
 
 export default {

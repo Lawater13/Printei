@@ -67,6 +67,64 @@ test("relatório retido não comprova conexão e silêncio não indica offline",
   assert.equal(snapshot.telemetry.nozzleC, 25);
 });
 
+test("usa uma única cor de cols como alternativa e separa bobina externa de canais AMS", () => {
+  const report = {
+    ams: { ams: [{ id: "0", tray: [
+      { id: "0", tray_color: "00000000", cols: ["1357ACFF"] },
+      { id: "1", tray_color: "F06F00FF", cols: ["FF1234FF"] },
+      { id: "2", cols: ["FF1234FF", "87FEDCFF"] },
+      { id: "3", cols: ["invalid"] }
+    ] }] },
+    vt_tray: { tray_type: "PETG", tray_color: "000000FF" },
+    vir_slot: [{ id: "254", tray_type: "PLA", cols: ["FEDCBAFF"] }]
+  };
+  assert.deepEqual(sample(report).channels, {
+    "0:0:color": "#1357AC",
+    "0:1:color": "#F06F00",
+    "external:0:material": "PLA",
+    "external:0:color": "#FEDCBA"
+  });
+  assert.deepEqual(sample({ vt_tray: { cols: ["0123abff"] } }).channels, { "external:0:color": "#0123AB" });
+  assert.deepEqual(sample({ vt_tray: report.vt_tray, vir_slot: [{ id: "254" }, { id: "255" }] }).channels, {});
+});
+
+test("relatório retido enriquece somente campos de canais ausentes após deltas ao vivo", () => {
+  const snapshot = updateMonitor(null, [sample({
+    nozzle_temper: 220,
+    ams: { ams: [
+      { id: "0", tray: [{ id: "0", tray_color: "FF0000FF" }, { id: "1" }] },
+      { id: "1", tray: [] }
+    ] }
+  })]);
+  updateMonitor(snapshot, [sample({
+    nozzle_temper: 200,
+    ams: { ams: [
+      { id: "0", tray: [
+        { id: "0", tray_color: "00FF00FF", tray_type: "PLA" },
+        { id: "1", tray_color: "0000FFFF", tray_type: "PETG" },
+        { id: "2", tray_color: "00000000" }
+      ] },
+      { id: "1", tray: [{ id: "0", tray_color: "FFFF00FF" }] }
+    ] }
+  }, 1000, true)]);
+  assert.deepEqual(snapshot.channels, {
+    "0:0:color": { value: "#FF0000", at: time },
+    "0:0:material": { value: "PLA", at: null },
+    "0:1:color": { value: null, at: time },
+    "0:1:material": { value: null, at: time }
+  });
+  assert.equal(snapshot.telemetry.nozzleC, 220);
+  assert.equal(snapshot.lastReportAt, time);
+  assert.equal(snapshot.lastSampleAt, time);
+
+  updateMonitor(snapshot, [sample({ ams: { ams: [] } }, 2000)]);
+  updateMonitor(snapshot, [sample({
+    ams: { ams: [{ id: "0", tray: [{ id: "0", tray_color: "FF0000FF" }] }] },
+    vt_tray: { tray_color: "FFFFFFFF" }
+  }, 3000, true)]);
+  assert.deepEqual(snapshot.channels, { "external:0:color": { value: "#FFFFFF", at: null } });
+});
+
 test("usa histórico da conta e estimativa por cor apenas da impressora e tarefa correspondentes", () => {
   const tasks = normalizeTasks({ hits: [
     { id: 17, deviceId: "OTHER", status: 2 },

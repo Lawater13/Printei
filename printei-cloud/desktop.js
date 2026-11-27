@@ -62,12 +62,14 @@ export async function verifyDesktopGrant(assertion, grant, secret, now = Date.no
     encoder.encode("printei-desktop-read-v1:" + assertion));
 }
 
-const page = (body, script, nonce, formAction = "'self'") => new Response(
+const page = (body, script, nonce, formAction = "'self'", status = 200) => new Response(
   '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
-  '<title>Conectar impressora</title><style>body{background:#15121b;color:#eee;font:16px system-ui;margin:28px}main{max-width:440px;margin:auto;padding:22px;border-radius:16px;background:#211b2b}h1{font-size:1.3em}label{display:block;margin:12px 0}input,button{font:inherit;padding:.45em}input{width:93%}button{background:#8546c7;color:white;border:0;border-radius:6px;margin:3px}</style><main>' +
+  '<title>Conectar impressora</title><style>body{background:#15121b;color:#eee;font:16px system-ui;margin:28px}main{max-width:440px;margin:auto;padding:22px;border-radius:16px;background:#211b2b}h1{font-size:1.3em}label{display:block;margin:12px 0}input,button{font:inherit;padding:.45em}input{width:93%}a{color:#d4a7ff}button{background:#8546c7;color:white;border:0;border-radius:6px;margin:3px}</style><main>' +
   body + '</main><script nonce="' + nonce + '">' + script + '</script></html>', {
+    status,
     headers: {
-      "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": formAction === callback ? "origin" : "no-referrer",
+      // A navigation POST sends Origin: null under no-referrer. Share only the origin, without the state query.
+      "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "origin",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-" +
         nonce + "'; frame-ancestors 'none'; base-uri 'none'; form-action " + formAction
@@ -111,10 +113,23 @@ export function desktopStart(state) {
     })};`, nonce);
 }
 
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+export function desktopFailure(message, status, state) {
+  const retry = typeof state === "string" && desktopStatePattern.test(state)
+    ? '<p><a href="/desktop/connect?state=' + state + '">Tentar novamente</a></p>'
+    : '<p>Feche esta janela e clique em Conectar impressora no Printei.</p>';
+  return page('<h1>Conectar impressora</h1><p role="alert">' + escapeHTML(message) + '</p>' + retry,
+    "", crypto.randomUUID(), "'self'", status);
+}
+
 export function desktopFinish(state, assertion, { grant, expires }) {
   const nonce = crypto.randomUUID();
   const hidden = (name, value) => '<input type="hidden" name="' + name + '" value="' +
-    String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]) + '">';
+    escapeHTML(value) + '">';
   return page('<h1>Concluindo conexão</h1><form id="done" method="post" action="' + callback + '">' +
     hidden("state", state) + hidden("assertion", assertion) + hidden("grant", grant) + hidden("expires", expires) +
     '<button>Voltar ao Printei</button></form>', 'document.getElementById("done").submit();', nonce, callback);

@@ -20,14 +20,19 @@ function number(value) {
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function normalizeColor(value) {
+  return typeof value === "string" && /^[0-9a-f]{8}$/i.test(value) && value !== "00000000"
+    ? "#" + value.slice(0, 6).toUpperCase() : null;
+}
+
 function normalizeTray(tray) {
   const data = {};
-  if (Object.keys(tray).length === 1) return { material: null, color: null };
+  if (!tray || typeof tray !== "object" || Array.isArray(tray)) return data;
+  if (Object.hasOwn(tray, "id") && Object.keys(tray).length === 1) return { material: null, color: null };
   if (typeof tray.tray_type === "string") data.material = tray.tray_type.slice(0, 40) || null;
-  if (typeof tray.tray_color === "string") {
-    data.color = /^[0-9a-f]{8}$/i.test(tray.tray_color) && tray.tray_color !== "00000000"
-      ? "#" + tray.tray_color.slice(0, 6).toUpperCase() : null;
-  }
+  const fallback = Array.isArray(tray.cols) && tray.cols.length === 1 ? normalizeColor(tray.cols[0]) : null;
+  const color = normalizeColor(tray.tray_color) ?? fallback;
+  if (color || typeof tray.tray_color === "string") data.color = color;
   return data;
 }
 
@@ -75,10 +80,13 @@ export function normalizeReport(report, at, retained = false) {
       }
     }
   }
-  if (report.vt_tray && typeof report.vt_tray === "object") {
-    for (const [field, value] of Object.entries(normalizeTray(report.vt_tray))) {
-      channels["external:0:" + field] = value;
-    }
+  // Studio treats vir_slot as authoritative when present. Preserve the single external
+  // spool representation only when that array identifies an unambiguous tray.
+  const external = Array.isArray(report.vir_slot)
+    ? (report.vir_slot.length === 1 ? report.vir_slot[0] : null)
+    : report.vt_tray;
+  for (const [field, value] of Object.entries(normalizeTray(external))) {
+    channels["external:0:" + field] = value;
   }
   return { at, retained, data, channels };
 }
@@ -125,7 +133,15 @@ export function updateMonitor(previous, samples, availability, cloud) {
   }
   if (availability && availability.at >= (snapshot.availability?.at ?? 0)) snapshot.availability = availability;
   for (const { at, retained, data, channels: delta } of samples) {
-    if (retained && snapshot.lastReportAt) continue;
+    if (retained && snapshot.lastReportAt) {
+      for (const [key, value] of Object.entries(delta)) {
+        const unit = key.split(":")[0];
+        if (value == null || Object.hasOwn(channels, key) || updated["unit:" + unit] != null ||
+            (unit !== "external" && updated.amsEmpty != null)) continue;
+        channels[key] = { value, at: null };
+      }
+      continue;
+    }
     if (!retained) snapshot.lastReportAt = Math.max(snapshot.lastReportAt ?? 0, at);
     const inOrder = at >= (snapshot.lastSampleAt ?? 0);
     const nextState = data.state || telemetry.state;

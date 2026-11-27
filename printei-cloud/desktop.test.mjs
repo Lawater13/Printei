@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { desktopFinish, desktopGrant, verifyDesktopGrant, verifyAccessAssertion } from "./desktop.js";
+import { desktopStart, desktopFailure, desktopFinish, desktopGrant, verifyDesktopGrant, verifyAccessAssertion } from "./desktop.js";
 
 const accessToken = exp => "header." + Buffer.from(JSON.stringify({ exp })).toString("base64url") + ".signature";
 
@@ -14,6 +14,28 @@ test("autorização desktop é vinculada ao JWT do Access, ao secret e à valida
   assert.equal(await verifyDesktopGrant(token, grant.grant, "test-key", 200_000), false);
   assert.equal(await desktopGrant(token, "test-key", 200_000), null);
   assert.equal(await desktopGrant("", "test-key", 100_000), null);
+});
+
+test("formulário de autorização preserva Origin no POST sem enviar a URL completa", async () => {
+  const state = "ab".repeat(32);
+  const response = desktopStart(state);
+  assert.equal(response.headers.get("referrer-policy"), "origin");
+  assert.match(response.headers.get("content-security-policy"), /form-action 'self'$/);
+  const body = await response.text();
+  assert.match(body, /action="\/desktop\/connect" method="post"/);
+  assert.match(body, new RegExp('name="state" value="' + state + '"'));
+});
+
+test("erro de autorização permite tentar de novo apenas com um estado válido", async () => {
+  const state = "ab".repeat(32);
+  const response = desktopFailure("Chave recusada", 403, state);
+  assert.equal(response.status, 403);
+  assert.match(response.headers.get("content-type"), /text\/html/);
+  assert.match(await response.text(), new RegExp('/desktop/connect\\?state=' + state));
+  const invalid = await desktopFailure("<inválido>", 400, 'invalid">').text();
+  assert.match(invalid, /Feche esta janela/);
+  assert.match(invalid, /&lt;inválido&gt;/);
+  assert.doesNotMatch(invalid, /state=/);
 });
 
 test("retorno envia a autorização somente no corpo para um destino loopback fixo", async () => {
