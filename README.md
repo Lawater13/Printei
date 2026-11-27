@@ -30,3 +30,13 @@ do Access na autorização inicial. A autorização do aplicativo vale apenas
 para a sessão e a telemetria e está vinculada ao token individual do Access.
 
 [Validação de tokens do Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
+
+
+### Cores dos canais BMCU
+
+Em **Visão geral → Canais BMCU → Configurar cores**, indique o canal em
+uso e escolha a cor de cada bobina que quiser identificar. As cores
+informadas ficam neste perfil do Printei, por impressora. O painel usa
+as cores que a impressora enviou recentemente quando disponíveis e
+identifica as preenchidas por você como **cor manual**. As preferências
+não são enviadas à impressora nem movimentam o estoque.
