@@ -21,14 +21,16 @@ function number(value) {
 }
 
 function normalizeColor(value) {
-  return typeof value === "string" && /^[0-9a-f]{8}$/i.test(value) && value !== "00000000"
-    ? "#" + value.slice(0, 6).toUpperCase() : null;
+  if (typeof value !== "string") return null;
+  const hex = value.trim().replace(/^#/, "");
+  if (!/^(?:[0-9a-f]{6}|[0-9a-f]{8})$/i.test(hex) || hex === "00000000") return null;
+  return "#" + hex.slice(0, 6).toUpperCase();
 }
 
 function normalizeTray(tray) {
   const data = {};
   if (!tray || typeof tray !== "object" || Array.isArray(tray)) return data;
-  if (Object.hasOwn(tray, "id") && Object.keys(tray).length === 1) return { material: null, color: null };
+  if (Object.hasOwn(tray, "id") && Object.keys(tray).length === 1) return data;
   if (typeof tray.tray_type === "string") data.material = tray.tray_type.slice(0, 40) || null;
   const fallback = Array.isArray(tray.cols) && tray.cols.length === 1 ? normalizeColor(tray.cols[0]) : null;
   const color = normalizeColor(tray.tray_color) ?? fallback;
