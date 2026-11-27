@@ -30,7 +30,7 @@ import (
 //go:embed index.html logo.svg printer-cloud.js
 var assets embed.FS
 
-var version = "8.57"
+var version = "8.58"
 const origin = "http://127.0.0.1:43872"
 const addr = "127.0.0.1:43872"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
@@ -186,7 +186,8 @@ const gate=document.getElementById('cloudGate');if(gate){const card=gate.querySe
 let busy=false;
 async function request(path){const r=await fetch(path,{method:'POST',headers:{'X-Printei-Update':'1'},cache:'no-store'});const d=await r.json();if(!r.ok||d.error)throw Error(d.error||'Falha na atualização');return d}
 function state(label,disabled){for(const b of buttons){b.disabled=disabled;b.textContent=label|| (b===mainButton?'↻ Atualizar':'↻ Atualizar Printei')}}
-async function update(){if(busy)return;busy=true;state('Verificando…',true);try{const m=await request('/update/check');if(!m.available){alert('Você já está na versão '+m.current+'.');return}const message='Printei '+m.version+' disponível. Deseja atualizar agora?';if(!window.confirm(message))return;state('Baixando…',true);const result=await request('/update/install');if(result.light){window.location.reload();return}state('Reiniciando…',true);alert('Atualização verificada. O Printei será reaberto.');try{window.close()}catch{}}catch(e){alert('Não foi possível atualizar: '+e.message)}finally{busy=false;state('',false)}}
+function updateDialog(title,message,question=false){return new Promise(resolve=>{const d=document.createElement('dialog');d.style.cssText='width:min(440px,90vw);box-sizing:border-box;background:#211d2b;color:#f7f0ff;border:1px solid #a855f7;border-radius:18px;padding:26px;box-shadow:0 20px 70px #0009;font:15px system-ui';const icon=document.createElement('div');icon.textContent='↻';icon.style.cssText='display:grid;place-items:center;width:46px;height:46px;border-radius:13px;background:#9333ea33;color:#c084fc;font-size:28px;margin-bottom:16px';const h=document.createElement('h2');h.textContent=title;h.style.cssText='margin:0 0 12px;font-size:22px';const p=document.createElement('p');p.textContent=message;p.style.cssText='margin:0 0 22px;color:#d4c6e5;line-height:1.6';const row=document.createElement('div');row.style.cssText='display:flex;justify-content:flex-end;gap:10px';function button(label,primary,value){const b=document.createElement('button');b.type='button';b.textContent=label;b.style.cssText='padding:11px 18px;border-radius:9px;border:1px solid #a855f755;color:white;background:'+(primary?'#9333ea':'#393043')+';font-weight:700;cursor:pointer';b.onclick=()=>d.close(value?'ok':'cancel');row.append(b)}if(question)button('Agora não',false,false);button(question?'Atualizar agora':'OK',true,true);d.append(icon,h,p,row);document.body.append(d);d.addEventListener('close',()=>{const ok=d.returnValue==='ok';d.remove();resolve(ok)},{once:true});d.showModal()})}
+async function update(){if(busy)return;busy=true;state('Verificando…',true);try{const m=await request('/update/check');if(!m.available){await updateDialog('Printei atualizado','Você já está na versão '+m.current+'.');return}const message='Printei '+m.version+' disponível. Deseja atualizar agora?';if(!await updateDialog('Nova atualização disponível',message,true))return;state('Baixando…',true);const result=await request('/update/install');if(result.light){window.location.reload();return}state('Reiniciando…',true);try{window.close()}catch{}}catch(e){await updateDialog('Não foi possível atualizar',e.message)}finally{busy=false;state('',false)}}
 for(const b of buttons)b.onclick=update;
 setTimeout(async()=>{try{const m=await request('/update/check');if(m.available&&!busy)state('↻ Atualizar • '+m.version,false)}catch{}},3000);
 const pageID=crypto.randomUUID();
