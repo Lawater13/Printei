@@ -256,9 +256,14 @@ func main(){
  if len(os.Args)==6&&os.Args[1]=="--apply-update"{if e:=applyUpdate(os.Args[2],os.Args[3],os.Args[4],os.Args[5]);e!=nil{notice("Atualização não instalada: "+e.Error(),16)};return}
  if len(os.Args)==2&&os.Args[1]=="--version"{fmt.Println(version);return}
  root:=os.Getenv("LOCALAPPDATA");if root==""{notice("LOCALAPPDATA indisponível.",16);return}
+ if len(os.Args)==3&&os.Args[1]=="--printer-auth"{showPrinterAuthorization(root,os.Args[2]);return}
  uiDir=filepath.Join(root,"Printei-V8.22-Experimental","Interface");loadUI()
  profile:=filepath.Join(root,"Printei-V8.22-Experimental","Perfil")
  if e:=os.MkdirAll(profile,0700);e!=nil{notice(e.Error(),16);return}
+ authorizationFile:=filepath.Join(filepath.Dir(profile),"printer-access.dat")
+ printerCloudAPI.credentials=loadPrinterAuthorization(authorizationFile)
+ printerCloudAPI.launch=launchPrinterAuthorization
+ printerCloudAPI.save=func(c printerCredentials)error{return savePrinterAuthorization(authorizationFile,c)}
  l,e:=net.Listen("tcp",addr);if e!=nil{notice("Feche a outra versão do Printei antes de abrir esta.",48);return}
  alarms.ack=make(map[string]bool)
  lastSeen.Store(time.Now().Unix())

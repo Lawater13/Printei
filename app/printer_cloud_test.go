@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testOrigin = "http://127.0.0.1:43872"
@@ -19,61 +22,78 @@ func printerPost(c *printerCloud, action, origin, body string) *httptest.Respons
 	return response
 }
 
-func TestPrinterAccessAndBambuSession(t *testing.T) {
-	var received []string
-	var body map[string]any
+func TestPrinterInteractiveAuthorization(t *testing.T) {
+	grant := strings.Repeat("a", 64)
+	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = append(received, r.URL.Path)
-		if r.Header.Get("CF-Access-Client-Id") != "client" || r.Header.Get("CF-Access-Client-Secret") != "secret" {
-			t.Error("missing Access credentials")
+		paths = append(paths, r.URL.Path)
+		cookie, err := r.Cookie("CF_Authorization")
+		if err != nil || cookie.Value != "header.claims.signature" || r.Header.Get("Origin") != "http://"+r.Host {
+			t.Error("missing Access authorization or Worker origin")
 		}
-		if r.Header.Get("Origin") != "http://"+r.Host {
-			t.Error("wrong Worker origin")
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["desktopGrant"] != grant {
+			t.Error("missing scoped grant")
 		}
-		body = nil
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["key"] != "admin" {
-			t.Error("missing Worker authentication")
+		if _, ok := body["key"]; ok {
+			t.Error("private key must stay out of desktop requests")
 		}
-		if _, ok := body["clientSecret"]; ok {
-			t.Error("Access secret was sent to the Worker JSON API")
-		}
-		if len(received) == 1 {
-			w.WriteHeader(401)
-			_, _ = w.Write([]byte(`{"error":"Sessão ausente ou expirada. Entre novamente com o código de e-mail."}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"devices":[]}`))
+		_, _ = w.Write([]byte(`{"devices":[{"name":"Suik Lab"}]}`))
 	}))
 	defer upstream.Close()
 	c := newPrinterCloud(upstream.URL, testOrigin)
-	expect := func(action, origin, payload string, status int) {
-		t.Helper()
-		got := printerPost(c, action, origin, payload)
-		if got.Code != status {
-			t.Fatalf("%s: status %d, expected %d, body %s", action, got.Code, status, got.Body)
-		}
+	var state string
+	c.launch = func(value string) error { state = value; return nil }
+	var saved printerCredentials
+	c.save = func(value printerCredentials) error { saved = value; return nil }
+	if got := printerPost(c, "connect", "https://other.test", "{}"); got.Code != 403 {
+		t.Fatal("cross-origin launch accepted")
 	}
-	const connect = `{"clientId":"client","clientSecret":"secret","key":"admin"}`
-	expect("connect", "https://other.test", connect, 403)
-	expect("telemetry", testOrigin, "{}", 428)
-	expect("connect", testOrigin, connect, 401)
-	expect("send", testOrigin, `{"email":"test@example.com"}`, 200)
-	if _, present := body["save"]; present {
-		t.Fatal("request for email code attempted to save the session")
+	if got := printerPost(c, "session", testOrigin, "{}"); got.Code != 428 {
+		t.Fatal("session unexpectedly available")
 	}
-	expect("login", testOrigin, `{"email":"test@example.com","code":"123456"}`, 200)
-	if body["save"] != true || body["code"] != "123456" {
-		t.Fatal("login did not request encrypted session persistence")
+	if got := printerPost(c, "connect", testOrigin, "{}"); got.Code != 200 || len(state) != 64 {
+		t.Fatal("launch challenge missing")
 	}
-	expect("telemetry", testOrigin, `{"device":1}`, 200)
-	if body["device"] != float64(1) {
-		t.Fatal("device selection not forwarded")
+	if got := printerPost(c, "session", testOrigin, "{}"); !strings.Contains(got.Body.String(), `"pairing":true`) {
+		t.Fatal("authorization status missing")
 	}
-	expect("logout", testOrigin, "{}", 404)
-	expect("disconnect", testOrigin, "{}", 200)
-	expect("session", testOrigin, "{}", 428)
-	if strings.Join(received, ",") != "/bambu/session,/bambu/test,/bambu/test,/bambu/telemetry" {
-		t.Fatalf("unexpected calls: %v", received)
+	callback := func(origin, nonce string) *httptest.ResponseRecorder {
+		body := url.Values{"state": {nonce}, "assertion": {"header.claims.signature"}, "grant": {grant},
+			"expires": {strconv.FormatInt(time.Now().Add(time.Hour).UnixMilli(), 10)}}
+		request := httptest.NewRequest(http.MethodPost, "/printer-cloud/callback", strings.NewReader(body.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		c.serve(response, request)
+		return response
+	}
+	if got := callback("https://other.test", state); got.Code != 403 {
+		t.Fatal("cross-origin callback accepted")
+	}
+	if got := callback(upstream.URL, strings.Repeat("b", 64)); got.Code != 403 {
+		t.Fatal("wrong challenge accepted")
+	}
+	if got := callback(upstream.URL, state); got.Code != 200 || !saved.valid() {
+		t.Fatalf("valid authorization rejected: %d %s", got.Code, got.Body)
+	}
+	if got := callback(upstream.URL, state); got.Code != 403 {
+		t.Fatal("replay accepted")
+	}
+	// A new process recovers the protected credentials without launching WebView2.
+	fresh := newPrinterCloud(upstream.URL, testOrigin)
+	fresh.credentials = saved
+	if got := printerPost(fresh, "session", testOrigin, "{}"); got.Code != 200 {
+		t.Fatal("saved authorization failed to reconnect")
+	}
+	if got := printerPost(fresh, "telemetry", testOrigin, `{"device":0}`); got.Code != 200 {
+		t.Fatal("telemetry denied")
+	}
+	if got := printerPost(fresh, "logout", testOrigin, "{}"); got.Code != 404 {
+		t.Fatal("desktop authorization can mutate the Worker session")
+	}
+	if strings.Join(paths, ",") != "/bambu/session,/bambu/session,/bambu/telemetry" {
+		t.Fatalf("unexpected requests: %v", paths)
 	}
 }
 
@@ -85,8 +105,9 @@ func TestPrinterAccessRedirectDoesNotForwardCredentials(t *testing.T) {
 	}))
 	defer upstream.Close()
 	c := newPrinterCloud(upstream.URL, testOrigin)
-	res := printerPost(c, "connect", testOrigin, `{"clientId":"client","clientSecret":"secret","key":"admin"}`)
-	if res.Code != 403 || calls != 1 || strings.Contains(res.Body.String(), "clientSecret") {
+	c.credentials = printerCredentials{Assertion: "a.b.c", Grant: strings.Repeat("a", 64), Expires: time.Now().Add(time.Hour).UnixMilli()}
+	res := printerPost(c, "session", testOrigin, "{}")
+	if res.Code != 403 || calls != 1 || strings.Contains(res.Body.String(), "a.b.c") {
 		t.Fatalf("unexpected redirect result: %d, %d calls", res.Code, calls)
 	}
 }

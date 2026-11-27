@@ -11,19 +11,22 @@ da V8.21 e importe uma cópia no perfil experimental.
 
 ### Vincular o monitor
 
-1. No Cloudflare Zero Trust, crie um Service Token dedicado para o teste.
-   Autorize esse token com uma política **Service Auth** apenas no Access
-   do Worker `printei-cloud-experimental`. A política existente para
-   entrar no painel web pode continuar em uso.
-2. Em **Configurações** da V8.22, preencha o Client ID, Client Secret e a
-   chave privada do Printei experimental. O processo guarda esses valores
-   em memória até desconectar ou fechar. O EXE e os backups não os contêm.
-3. Se a sessão Bambu ainda estiver válida, o aplicativo reabre a sessão
-   salva. Se estiver vencida, solicite e confirme o código de e-mail pelo
-   formulário Bambu. O Worker guarda o token Bambu criptografado.
-4. Abra **Visão geral** ou **Produção**. O aplicativo consulta o Worker a
-   cada 30 segundos enquanto um desses painéis estiver visível. O histórico
-   usa os trabalhos recentes disponibilizados pelo Worker. Os valores em
-   gramas são estimativas por cor, sem movimentação de estoque.
+1. Na V8.22, abra **Configurações** e clique em **Conectar impressora**.
+2. Na janela WebView2, entre pelo Cloudflare Access com sua conta autorizada.
+   Confirme a primeira autorização com a chave privada do Printei experimental.
+   Se a sessão Bambu no Worker estiver ausente ou vencida, vincule a conta
+   com o código recebido por e-mail nessa mesma janela.
+3. Ao reabrir o aplicativo, a conexão é retomada enquanto a autorização
+   do Access e a sessão Bambu estiverem válidas. A autorização de leitura
+   e o token do Access são protegidos por DPAPI no perfil do usuário Windows.
+   A chave privada do Printei é usada somente na autorização interativa e
+   não é gravada no aplicativo, no arquivo de autorização ou nos backups.
+4. **Visão geral** e **Produção** consultam o Worker a cada 30 segundos
+   enquanto visíveis. O histórico mostra os trabalhos recentes que o Worker
+   disponibiliza. As estimativas em gramas não movimentam o estoque.
 
-[Service Tokens do Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
+O Worker experimental verifica emissor, audiência, assinatura e validade
+do Access na autorização inicial. A autorização do aplicativo vale apenas
+para a sessão e a telemetria e está vinculada ao token individual do Access.
+
+[Validação de tokens do Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)

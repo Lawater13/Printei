@@ -356,6 +356,18 @@ header .topstatus #cloudActions button{flex:1;min-width:0}
 .printer-table td,.printer-table th{padding:9px;border-bottom:1px solid var(--ui-line);white-space:normal}
 .printer-estimate{display:inline-block;margin:2px 10px 2px 0;white-space:nowrap}
 .printer-settings{max-width:920px}
+#printerOverview{padding:12px 16px;background:linear-gradient(135deg,var(--ui-soft),transparent 65%),var(--ui-panel);border-color:color-mix(in srgb,#a855f7 30%,var(--ui-line))}
+#printerOverview h3{margin:0;font-size:1rem}
+#printerOverview .printer-heading button{margin:0;padding:6px 10px}
+#printerOverview .printer-job{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap}
+#printerOverview .printer-job strong{font-size:.82rem;color:var(--ui-muted)}
+#printerStatus{font-size:.78rem;margin:5px 0}
+#printerMetrics{grid-template-columns:auto 1fr auto 1fr;gap:4px 10px;font-size:.86rem}
+#printerChannels{margin:5px 0 3px;grid-template-columns:repeat(4,minmax(0,1fr));font-size:.82rem}
+#printerChannels li{padding:6px 8px}
+#printerOverview details summary{font-size:.82rem;padding-bottom:0}
+@media(max-width:560px){#printerChannels{grid-template-columns:repeat(2,minmax(0,1fr))}#printerMetrics{grid-template-columns:auto 1fr}}
+
 </style><header><div class="brandrow"><img class="brandlogo" src="logo.svg" alt="Logo Printei"><div class="brandtext"><h1>Printei</h1><small>Bambu Lab A1 mini · Oficina pessoal</small></div><div class="topstatus"><span id="versionBadge" title="Versão da interface instalada">Printei v6.2 Portable</span><button class="themebutton" id="updateCheck" type="button" title="Verificar atualizações do Printei">↻ Atualizar</button><button class="themebutton" id="layoutToggle" type="button">✎ Editar interface</button><button class="themebutton" id="themeToggle" type="button">Tema claro/escuro</button></div></div><nav id="nav"></nav></header><main>
 <section id="home"><div class="dashboard-title"><div><h2>Visão geral</h2><p class="muted">Acompanhe sua produção, seus pedidos e o caixa em um só lugar.</p></div><button onclick="newOrder()">+ Novo pedido</button></div><div class="card printer-card" id="printerOverview">
   <div class="printer-heading">
@@ -394,24 +406,8 @@ header .topstatus #cloudActions button{flex:1;min-width:0}
   <div class="dashboard-title"><h2>Configurações</h2></div>
   <div class="card printer-card printer-settings">
     <h3>Printei Cloud experimental</h3>
-    <p class="muted">Conecte com um Service Token autorizado no Cloudflare Access deste Worker e com a chave privada do Printei. As credenciais duram até fechar o aplicativo.</p>
-    <form id="printerAccessForm" autocomplete="off">
-      <div class="printer-filters">
-        <div><label for="printerClientId">Access Client ID</label><input id="printerClientId" required maxlength="512" spellcheck="false"></div>
-        <div><label for="printerClientSecret">Access Client Secret</label><input id="printerClientSecret" type="password" required maxlength="512" autocomplete="off"></div>
-        <div><label for="printerAdminKey">Chave privada do Printei</label><input id="printerAdminKey" type="password" required maxlength="1024" autocomplete="off"></div>
-      </div>
-      <div class="printer-actions"><button type="submit">Conectar</button><button type="button" class="secondary" id="printerDisconnect">Desconectar aplicativo</button></div>
-    </form>
+    <button type="button" id="printerConnect">Conectar impressora</button>
     <p id="printerSettingsStatus" role="status"></p>
-    <form id="printerBambuForm" autocomplete="off" hidden>
-      <h3>Vinculação Bambu Cloud</h3>
-      <div class="printer-filters">
-        <div><label for="printerEmail">E-mail Bambu Lab</label><input type="email" id="printerEmail" maxlength="254" required></div>
-        <div><label for="printerCode">Código de verificação</label><input id="printerCode" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required></div>
-      </div>
-      <div class="printer-actions"><button type="button" class="secondary" id="printerSendCode">Solicitar código</button><button type="submit">Vincular conta Bambu</button></div>
-    </form>
     <div id="printerDeviceField" hidden><label for="printerSelect">Impressora</label><select id="printerSelect"></select></div>
   </div>
 </section>

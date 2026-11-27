@@ -26,7 +26,7 @@
   let reportMessage = "";
   let historyMessage = "";
   let generation = 0;
-  const forms = [el("printerAccessForm"), el("printerBambuForm")];
+  let pairing = false, restoring = false, retryAt = 0;
 
   async function api(action, data = {}) {
     const response = await fetch("/printer-cloud/" + action, {
@@ -60,64 +60,45 @@
     render();
   }
 
-  async function settings(action) {
-    if (forms.some(form => form.dataset.busy)) return;
-    for (const form of forms) form.dataset.busy = "1";
-    const controls = el("printerSettings").querySelectorAll("button, input");
-    controls.forEach(control => { control.disabled = true; });
-    try { await action(); }
-    catch (error) { set("printerSettingsStatus", error.message); }
-    finally {
-      forms.forEach(form => { delete form.dataset.busy; });
-      controls.forEach(control => { control.disabled = false; });
+  const connectButton = el("printerConnect");
+  async function restore() {
+    if (restoring) return;
+    restoring = true;
+    try {
+      const result = await api("session");
+      if (result.pairing) {
+        pairing = true;
+        retryAt = Date.now() + 2000;
+        return;
+      }
+      loadDevices(result);
+      set("printerSettingsStatus", linked ? "Impressora conectada." : "Nenhuma impressora vinculada.");
+    } catch (error) {
+      if (error.status === 428) {
+        set("printerSettingsStatus", pairing ? "Autorização pendente. Abra uma nova janela para tentar novamente." : "");
+      } else {
+        set("printerSettingsStatus", error.message);
+        if (error.status === 502 || !error.status) retryAt = Date.now() + 15000;
+      }
+    } finally {
+      if (retryAt <= Date.now()) pairing = false;
+      restoring = false;
+      connectButton.disabled = linked;
     }
   }
-
-  forms[0].onsubmit = event => {
-    event.preventDefault();
-    settings(async () => {
-      try {
-        loadDevices(await api("connect", { clientId: get("printerClientId"),
-          clientSecret: get("printerClientSecret"), key: get("printerAdminKey") }));
-        el("printerBambuForm").hidden = false;
-        set("printerSettingsStatus", linked ? "Sessão Bambu reaberta." : "Nenhuma impressora vinculada.");
-      } catch (error) {
-        if (error.status !== 401) throw error;
-        loadDevices({});
-        el("printerBambuForm").hidden = false;
-        set("printerSettingsStatus", "Access conectado. Solicite o código por e-mail para vincular a Bambu Cloud.");
-      } finally {
-        el("printerClientSecret").value = "";
-        el("printerAdminKey").value = "";
-      }
-    });
+  connectButton.onclick = async () => {
+    connectButton.disabled = true;
+    try {
+      await api("connect");
+      pairing = true;
+      set("printerSettingsStatus", "Conclua a autorização na janela do Printei.");
+      retryAt = Date.now() + 1000;
+    } catch (error) {
+      set("printerSettingsStatus", error.message);
+    } finally {
+      connectButton.disabled = linked;
+    }
   };
-  el("printerSendCode").onclick = () => {
-    if (!el("printerEmail").reportValidity()) return;
-    settings(async () => {
-      const response = await api("send", { email: get("printerEmail") });
-      set("printerSettingsStatus", response.message);
-    });
-  };
-  forms[1].onsubmit = event => {
-    event.preventDefault();
-    settings(async () => {
-      try {
-        loadDevices(await api("login", { email: get("printerEmail"), code: get("printerCode") }));
-        set("printerSettingsStatus", linked ? "Conta Bambu vinculada." : "Nenhuma impressora vinculada.");
-      } finally {
-        el("printerCode").value = "";
-      }
-    });
-  };
-  el("printerDisconnect").onclick = () => settings(async () => {
-    await api("disconnect");
-    loadDevices({});
-    el("printerBambuForm").reset();
-    el("printerAccessForm").reset();
-    el("printerBambuForm").hidden = true;
-    set("printerSettingsStatus", "Aplicativo desconectado. A sessão no Worker continua disponível.");
-  });
   el("printerSelect").onchange = () => {
     selected = Number(get("printerSelect"));
     generation++;
@@ -274,6 +255,8 @@
       historyMessage = reportMessage;
       if (error.status === 401 || error.status === 403) {
         linked = false;
+        connectButton.disabled = false;
+        set("printerSettingsStatus", error.message);
         snapshot = {};
       }
     } finally {
@@ -285,10 +268,15 @@
   el("printerProductionRefresh").onclick = () => refresh(true);
   document.addEventListener("visibilitychange", () => refresh());
   setInterval(() => {
+    if (retryAt && Date.now() >= retryAt && !restoring) {
+      retryAt = 0;
+      restore();
+    }
     if (!document.hidden && visible.size) refresh();
   }, 1000);
   setInterval(() => {
     if (!document.hidden && visible.size) render();
   }, 15000);
   render();
+  restore();
 })();

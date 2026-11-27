@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,17 +18,29 @@ import (
 const printerCloudURL = "https://printei-cloud-experimental.suikeder.workers.dev"
 
 type printerCredentials struct {
-	ClientID     string `json:"clientId"`
-	ClientSecret string `json:"clientSecret"`
-	Key          string `json:"key"`
+	Assertion string `json:"assertion"`
+	Grant     string `json:"grant"`
+	Expires   int64  `json:"expires"`
+}
+
+func (c printerCredentials) valid() bool {
+	_, err := hex.DecodeString(c.Grant)
+	return len(c.Grant) == 64 && err == nil && len(c.Assertion) < 12000 &&
+		strings.Count(c.Assertion, ".") == 2 && !strings.ContainsAny(c.Assertion, "\r\n; ,") &&
+		c.Expires > time.Now().UnixMilli()
 }
 
 type printerCloud struct {
 	mu          sync.Mutex
 	credentials printerCredentials
+	state       string
+	deadline    time.Time
+	revision    uint64
 	client      *http.Client
 	endpoint    string
 	origin      string
+	launch      func(string) error
+	save        func(printerCredentials) error
 }
 
 func newPrinterCloud(endpoint, origin string) *printerCloud {
@@ -38,6 +54,10 @@ func newPrinterCloud(endpoint, origin string) *printerCloud {
 
 func (c *printerCloud) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Path == "/printer-cloud/callback" {
+		c.callback(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	write := func(status int, message string) {
 		w.WriteHeader(status)
@@ -47,51 +67,53 @@ func (c *printerCloud) serve(w http.ResponseWriter, r *http.Request) {
 		write(http.StatusForbidden, "Acesso local negado.")
 		return
 	}
-
-	var input struct {
-		printerCredentials
-		Email  string `json:"email"`
-		Code   string `json:"code"`
-		Device int    `json:"device"`
+	if r.URL.Path == "/printer-cloud/connect" {
+		var random [32]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			write(500, "Não foi possível iniciar a autorização.")
+			return
+		}
+		state := hex.EncodeToString(random[:])
+		c.mu.Lock()
+		c.state, c.deadline = state, time.Now().Add(10*time.Minute)
+		c.revision++
+		c.mu.Unlock()
+		if err := c.launch(state); err != nil {
+			c.mu.Lock()
+			if c.state == state {
+				c.state = ""
+				c.deadline = time.Time{}
+			}
+			c.mu.Unlock()
+			write(500, "Não foi possível abrir a janela de autorização.")
+			return
+		}
+		_, _ = io.WriteString(w, "{}")
+		return
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil {
+	var input struct {
+		Device int `json:"device"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&input); err != nil {
 		write(http.StatusBadRequest, "Dados da solicitação inválidos.")
 		return
 	}
 	c.mu.Lock()
 	credentials := c.credentials
+	pairing := time.Now().Before(c.deadline)
 	c.mu.Unlock()
-	var path string
-	payload := make(map[string]any)
-	switch r.URL.Path {
-	case "/printer-cloud/disconnect":
-		c.mu.Lock()
-		c.credentials = printerCredentials{}
-		c.mu.Unlock()
-		_, _ = io.WriteString(w, "{}")
+	if pairing && r.URL.Path == "/printer-cloud/session" {
+		_, _ = io.WriteString(w, `{"pairing":true}`)
 		return
-	case "/printer-cloud/connect":
-		credentials = input.printerCredentials
-		credentials.ClientID = strings.TrimSpace(credentials.ClientID)
-		credentials.ClientSecret = strings.TrimSpace(credentials.ClientSecret)
-		if credentials.ClientID == "" || credentials.ClientSecret == "" || credentials.Key == "" ||
-			len(credentials.Key) > 1024 || strings.ContainsAny(credentials.ClientID+credentials.ClientSecret, "\r\n") {
-			write(http.StatusBadRequest, "Informe as credenciais do Access e a chave privada do Printei.")
-			return
-		}
-		path = "/bambu/session"
+	}
+	if !credentials.valid() {
+		write(http.StatusPreconditionRequired, "Conecte a impressora em Configurações.")
+		return
+	}
+	payload := map[string]any{"desktopGrant": credentials.Grant}
+	path := "/bambu/session"
+	switch r.URL.Path {
 	case "/printer-cloud/session":
-		path = "/bambu/session"
-	case "/printer-cloud/send":
-		path = "/bambu/test"
-		payload["email"] = input.Email
-	case "/printer-cloud/login":
-		if len(input.Code) != 6 {
-			write(http.StatusBadRequest, "Informe o código de seis dígitos.")
-			return
-		}
-		path = "/bambu/test"
-		payload["email"], payload["code"], payload["save"] = input.Email, input.Code, true
 	case "/printer-cloud/telemetry":
 		path = "/bambu/telemetry"
 		payload["device"] = input.Device
@@ -99,23 +121,65 @@ func (c *printerCloud) serve(w http.ResponseWriter, r *http.Request) {
 		write(http.StatusNotFound, "Rota desconhecida.")
 		return
 	}
-	if credentials.ClientID == "" {
-		write(http.StatusPreconditionRequired, "Conecte o Printei Cloud em Configurações.")
-		return
-	}
-	payload["key"] = credentials.Key
 	status, body, err := c.request(r, path, payload, credentials)
 	if err != nil {
 		write(status, err.Error())
 		return
 	}
-	if r.URL.Path == "/printer-cloud/connect" && (status == http.StatusOK || status == http.StatusUnauthorized) {
-		c.mu.Lock()
-		c.credentials = credentials
-		c.mu.Unlock()
-	}
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+func (c *printerCloud) callback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+	if r.Method != http.MethodPost || r.Header.Get("Origin") != c.endpoint {
+		http.Error(w, "Origem da autorização inválida.", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16384)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Autorização inválida.", http.StatusBadRequest)
+		return
+	}
+	expires, _ := strconv.ParseInt(r.PostForm.Get("expires"), 10, 64)
+	credentials := printerCredentials{Assertion: r.PostForm.Get("assertion"), Grant: r.PostForm.Get("grant"), Expires: expires}
+	state := r.PostForm.Get("state")
+	c.mu.Lock()
+	if len(state) != 64 || subtle.ConstantTimeCompare([]byte(state), []byte(c.state)) != 1 ||
+		!time.Now().Before(c.deadline) || !credentials.valid() {
+		c.mu.Unlock()
+		http.Error(w, "Autorização inválida ou expirada. Abra uma nova janela pelo Printei.", http.StatusForbidden)
+		return
+	}
+	// Consume the challenge before contacting the Worker so simultaneous callbacks cannot both commit.
+	revision := c.revision
+	c.state = ""
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.revision == revision {
+			c.deadline = time.Time{}
+		}
+	}()
+	status, _, err := c.request(r, "/bambu/session", map[string]any{"desktopGrant": credentials.Grant}, credentials)
+	if err != nil || status != http.StatusOK {
+		http.Error(w, "O Worker não confirmou a sessão. Abra uma nova autorização pelo Printei.", http.StatusForbidden)
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.revision != revision {
+		http.Error(w, "Já existe uma autorização mais recente.", http.StatusConflict)
+		return
+	}
+	if err := c.save(credentials); err != nil {
+		http.Error(w, "Não foi possível salvar a autorização no Windows.", http.StatusInternalServerError)
+		return
+	}
+	c.credentials = credentials
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Autorização concluída</title><h1>Impressora conectada</h1><p>Feche esta janela para voltar ao Printei.</p></html>`)
 }
 
 func (c *printerCloud) request(r *http.Request, path string, payload map[string]any, credentials printerCredentials) (int, []byte, error) {
@@ -130,26 +194,19 @@ func (c *printerCloud) request(r *http.Request, path string, payload map[string]
 	}
 	request.Header.Set("Origin", c.endpoint)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("CF-Access-Client-Id", credentials.ClientID)
-	request.Header.Set("CF-Access-Client-Secret", credentials.ClientSecret)
+	request.AddCookie(&http.Cookie{Name: "CF_Authorization", Value: credentials.Assertion})
 	response, err := c.client.Do(request)
 	if err != nil {
 		return fail(http.StatusBadGateway, "Falha de comunicação com o Printei Cloud experimental.")
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= 300 && response.StatusCode < 400 {
-		return fail(http.StatusForbidden, "Cloudflare Access exige um Service Token autorizado no Worker experimental.")
+	if response.StatusCode >= 300 && response.StatusCode < 400 || response.StatusCode == http.StatusForbidden {
+		return fail(http.StatusForbidden, "A autorização expirou ou foi revogada. Conecte a impressora novamente.")
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	var object map[string]json.RawMessage
 	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, &object) != nil || object == nil {
-		if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusUnauthorized {
-			return fail(http.StatusForbidden, "Cloudflare Access recusou as credenciais. Confira a política Service Auth.")
-		}
 		return fail(http.StatusBadGateway, "O Printei Cloud retornou uma resposta incompatível.")
-	}
-	if response.StatusCode == http.StatusUnauthorized && path == "/bambu/session" && string(object["error"]) != `"Sessão ausente ou expirada. Entre novamente com o código de e-mail."` {
-		return fail(http.StatusForbidden, "Cloudflare Access recusou as credenciais.")
 	}
 	return response.StatusCode, raw, nil
 }
