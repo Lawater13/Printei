@@ -245,6 +245,18 @@ section.layout-editing .layout-panel.layout-dragging{opacity:1!important}
 #clients .client-order-count,#clients .client-quick-edit{width:100%;min-height:34px;justify-content:center;margin:0;box-sizing:border-box}
 #clients .client-chevron{justify-self:center;align-self:center}
 @media(max-width:700px){#clients .client-compact-head{grid-template-columns:minmax(0,1fr) 100px 35px 14px;gap:8px;padding:12px}#clients .client-tier-column{grid-column:1;grid-row:2}#clients .client-tier-column:empty{display:none}#clients .client-order-count{grid-column:2;grid-row:1}#clients .client-quick-edit{grid-column:3;grid-row:1;padding:6px}#clients .client-quick-edit span{display:none}#clients .client-chevron{grid-column:4;grid-row:1}}
+</style><style id="dashboard859">
+#home #upcoming .upcoming-delivery{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:12px 14px;margin:8px 0}
+#home #upcoming .upcoming-delivery>span:first-child{display:flex;flex-direction:column;gap:5px;min-width:0}
+#home #upcoming .upcoming-delivery strong{display:block;line-height:1.4;overflow-wrap:anywhere}
+#home #upcoming .upcoming-delivery small{display:block;color:var(--ui-muted);font-size:.78rem}
+#home .delivery-count{display:inline-flex;align-items:center;justify-content:center;border-radius:8px;padding:6px 10px;font-size:.76rem;font-weight:800;white-space:nowrap;border:1px solid #a855f755;color:#a855f7;background:#9333ea15}
+#home .delivery-count.urgent{color:#eab308;background:#854d0e22;border-color:#eab30855}
+#home .delivery-count.late{color:#ef4444;background:#991b1b22;border-color:#ef444466}
+#home .delivery-count.neutral{color:var(--ui-muted)}
+#home .layout-panel.card,#home #printerOverview,#home #homeTitheCard,#home .dashboard-stack>.card,#home .dashboard-columns>.card,#home #metrics>.card{border:1px solid #a855f777;border-left:3px solid #9333ea;border-radius:14px;box-shadow:0 5px 18px #6924a012}
+#home #homeTitheCard{justify-content:space-evenly;gap:12px}
+@media(max-width:700px){#home #upcoming .upcoming-delivery{grid-template-columns:1fr;gap:8px}#home #upcoming .delivery-count{justify-self:start}}
 </style><style id="alarm717">#testAlarmDialog,#deadlineAlarmDialog{width:min(460px,92vw);text-align:center;background:var(--ui-panel);color:var(--ui-text);border:1px solid #9333ea;border-radius:18px;padding:26px;box-shadow:0 20px 70px #0006}#testAlarmDialog::backdrop,#deadlineAlarmDialog::backdrop{background:#0009}#testAlarmDialog .alarmicon{font-size:36px;margin-bottom:12px}#testAlarmDialog button{width:100%;margin-top:12px}</style><style>
 html:not(.printei-entered) body>header,html:not(.printei-entered) body>main,html:not(.printei-entered) body>footer{display:none!important}
 #cloudGate{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;overflow:auto;padding:24px;background:radial-gradient(ellipse at 92% 0%,#391363 0,transparent 48%),radial-gradient(ellipse at 0% 100%,#45137c 0,transparent 45%),#121019;color:#f6f1fc;font:15px system-ui,sans-serif}
@@ -811,6 +823,9 @@ function fitHomePanels(c,layout,g,i){
  const visible=layout.items.filter(x=>!x.hidden&&c.panels.get(x.id)?.g===i);
  const ordered=visible.slice().sort((a,b)=>a.fy-b.fy||a.fx-b.fx);
  const placed=[];
+ const printer=visible.find(x=>x.id==='printer'),tithe=visible.find(x=>x.id==='tithe');
+ const tn=tithe&&c.panels.get(tithe.id).node;
+ if(tn){tn.style.removeProperty('min-height');if(c!==ctx&&printer&&Math.abs(printer.fy-tithe.fy)<8&&printer.fx+printer.fw<=tithe.fx+1&&g.grid.clientWidth>1100&&!c.panels.get(printer.id).node.querySelector('details[open]')){tn.style.minHeight=Math.max(c.panels.get(printer.id).node.offsetHeight,Number(tithe.height)||0)+'px'}}
  for(const x of ordered){
   const p=c.panels.get(x.id);
   let y=x.fy;
