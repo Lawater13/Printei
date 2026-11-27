@@ -119,10 +119,21 @@
     const term = document.createElement("dt"), detail = document.createElement("dd");
     term.textContent = label;
     detail.textContent = value;
-    list.append(term, detail);
+    if (list.id === "printerMetrics") {
+      const tile = document.createElement("div");
+      tile.className = "printer-metric-tile";
+      const icon = document.createElement("span");
+      icon.className = "printer-metric-icon";
+      icon.setAttribute("aria-hidden", "true");
+      const paths = {"Estado":"M8 5l12 7-12 7z","Progresso":"M12 3a9 9 0 1 1-9 9M12 3v4","Restante":"M12 7v5l4 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0","Bico":"M8 3h8v8l-4 5-4-5zM12 16v5","Mesa":"M4 19h16M8 15c-3-4 3-5 0-9M12 15c-3-4 3-5 0-9M16 15c-3-4 3-5 0-9"};
+      const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+      svg.setAttribute("viewBox","0 0 24 24"); svg.setAttribute("fill","none"); svg.setAttribute("stroke","currentColor"); svg.setAttribute("stroke-width","1.7"); svg.setAttribute("stroke-linecap","round"); svg.setAttribute("stroke-linejoin","round");
+      const path = document.createElementNS(svg.namespaceURI,"path"); path.setAttribute("d",paths[label] || paths.Estado); svg.append(path); icon.append(svg); tile.append(icon,term,detail); list.append(tile);
+    } else list.append(term, detail);
   }
   function swatch(color) {
     const chip = document.createElement("span");
+    chip.className = "printer-swatch";
     if (typeof color === "string" && /^#[0-9A-F]{6}$/i.test(color)) {
       chip.className = "printer-swatch";
       chip.style.backgroundColor = color;
@@ -297,6 +308,7 @@
       : linked ? "Aguardando a primeira consulta." : "Conecte o Printei Cloud em Configurações."));
     const connection = stale(snapshot.connectionAt) ? null : snapshot.connection;
     const state = Object.hasOwn(states, data.state) ? states[data.state] : data.state;
+    el("printerConnection").dataset.status = connection || "unknown";
     set("printerConnection", connection ? (connection === "online" ? "Online" : "Offline") : "Conexão indeterminada");
     set("printerJob", ["RUNNING", "PAUSE", "PREPARE", "INIT", "SLICING"].includes(data.state)
       ? observed(data.job || data.file, data.job ? times.job : times.file) : unavailable);
