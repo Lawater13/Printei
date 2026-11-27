@@ -69,7 +69,16 @@ export const panel = String.raw`<!doctype html>
       monitor.hidden = true;
       byId("auto").checked = false;
     }
-    if (!response.ok) throw new Error(result.error || "Falha na solicitação.");
+    if (!response.ok) {
+      const evidence = [
+        result.stage,
+        result.category,
+        Number.isInteger(result.upstreamStatus) ? "HTTP Bambu " + result.upstreamStatus : null,
+        Number.isInteger(result.applicationCode) ? "código Bambu " + result.applicationCode : null
+      ].filter(Boolean);
+      const message = result.error || "Falha na solicitação.";
+      throw new Error(evidence.length ? message + " (" + evidence.join(" · ") + ")" : message);
+    }
     return result;
   }
   async function run(action) {

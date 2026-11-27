@@ -18,8 +18,54 @@ async function authorized(key, secret) {
   return crypto.subtle.timingSafeEqual(provided, expected);
 }
 
-function bambu(path, options = {}) {
-  return fetch(api + path, { ...options, redirect: "manual", signal: AbortSignal.timeout(15000) });
+class BambuError extends Error {
+  constructor(message, stage, category, status = 502, details = {}) {
+    super(message);
+    this.status = status;
+    this.diagnostic = { stage, category, ...details };
+  }
+}
+
+async function bambu(stage, path, options = {}) {
+  let response;
+  try {
+    response = await fetch(api + path, { ...options, redirect: "manual", signal: AbortSignal.timeout(20000) });
+    const upstreamStatus = response.status;
+    const details = { upstreamStatus };
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      if (upstreamStatus >= 300 && upstreamStatus < 400) {
+        throw new BambuError("A Bambu Cloud respondeu com um redirecionamento bloqueado.", stage, "redirect", 502, details);
+      }
+      if (upstreamStatus === 429) {
+        throw new BambuError("A Bambu Cloud limitou as solicitações. Aguarde antes de tentar novamente.", stage, "rate_limit", 429, details);
+      }
+      if (upstreamStatus === 401 || upstreamStatus === 403) {
+        throw new BambuError("A Bambu Cloud recusou o acesso nesta etapa.", stage, "access_denied", 502, details);
+      }
+      throw new BambuError("A Bambu Cloud retornou um erro HTTP.", stage, "http_error", 502, details);
+    }
+    const result = await response.json();
+    if (result && typeof result === "object" && !Array.isArray(result)) return result;
+    throw new SyntaxError("Expected a JSON object");
+  } catch (cause) {
+    if (cause instanceof BambuError) throw cause;
+    const details = response ? { upstreamStatus: response.status } : {};
+    if (cause?.name === "SyntaxError") {
+      throw new BambuError("A Bambu Cloud retornou uma resposta em formato inesperado.", stage, "invalid_response", 502, details);
+    }
+    if (["TimeoutError", "AbortError"].includes(cause?.name)) {
+      throw new BambuError("A Bambu Cloud demorou demais para responder.", stage, "timeout", 504, details);
+    }
+    const category = cause?.name === "TypeError" ? "network" : "runtime";
+    throw new BambuError("Falha de comunicação com a Bambu Cloud.", stage, category, 502, details);
+  }
+}
+
+function applicationError(message, stage, code, status) {
+  const applicationCode = (typeof code === "number" || typeof code === "string") &&
+    /^-?\d{1,9}$/.test(String(code)) ? Number(code) : undefined;
+  return new BambuError(message, stage, "application_error", status, { applicationCode });
 }
 
 async function authenticate(body, env) {
@@ -28,31 +74,30 @@ async function authenticate(body, env) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || (code && !/^\d{6}$/.test(code))) {
     return error("Confira o e-mail e o código de seis dígitos.", 400);
   }
-  if (body.save && !/^[0-9a-f]{64}$/i.test(env.PRINTEI_SESSION_KEY ?? "")) {
+  if (code && body.save && !/^[0-9a-f]{64}$/i.test(env.PRINTEI_SESSION_KEY ?? "")) {
     return error("Configure PRINTEI_SESSION_KEY nos segredos do Worker.", 503);
   }
   const endpoint = code ? "login" : "sendemail/code";
-  const response = await bambu("/v1/user-service/user/" + endpoint, {
+  const stage = code ? "verificacao" : "solicitacao";
+  const result = await bambu(stage, "/v1/user-service/user/" + endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(code ? { account: email, code } : { email, type: "codeLogin" })
   });
-  const result = await response.json().catch(() => null);
-  if (!response.ok || !result) return error("A Bambu Cloud recusou a solicitação ou retornou uma resposta incompatível.", 502);
   if (!code) {
     if (result.code != null && ![0, 200, "0", "200"].includes(result.code)) {
-      return error("A Bambu Cloud recusou o envio do código.", 502);
+      throw applicationError("A Bambu Cloud recusou o envio do código.", stage, result.code, 502);
     }
     return json({ authenticated: false, message: "Solicitação enviada. Confira seu e-mail." });
   }
   const token = result.accessToken;
   if (typeof token !== "string" || !token || token.length > 8192) {
-    return error("A Bambu Cloud não retornou uma sessão válida. Confira o código.", 401);
+    throw applicationError("A Bambu Cloud não retornou uma sessão válida. Confira o código.", stage, result.code, 401);
   }
   const options = { headers: { Authorization: "Bearer " + token } };
-  const devices = await bambu("/v1/iot-service/api/user/bind", options);
-  const list = (await devices.json().catch(() => null))?.devices;
-  const deviceLookup = devices.ok && Array.isArray(list);
+  const devices = await bambu("impressoras", "/v1/iot-service/api/user/bind", options);
+  const list = devices.devices;
+  const deviceLookup = Array.isArray(list);
   const validDevices = deviceLookup ? list.flatMap(device => {
     if (!device || !/^[A-Za-z0-9]{1,64}$/.test(device.dev_id ?? "")) return [];
     return [{
@@ -64,15 +109,17 @@ async function authenticate(body, env) {
   }) : [];
   const summary = validDevices.map(({ name, model, online }) => ({ name, model, online }));
   if (!body.save) return json({ authenticated: true, deviceLookup, devices: summary });
-  if (!deviceLookup) return error("Falha ao consultar impressoras vinculadas.", 502);
+  if (!deviceLookup) {
+    throw new BambuError("A Bambu Cloud retornou uma lista de impressoras em formato inesperado.", "impressoras", "invalid_response");
+  }
   if (!validDevices.length) return error("Nenhuma impressora vinculada disponível para monitoramento.", 422);
   let username = tokenClaims(token)?.username;
   if (typeof username !== "string" || !/^u_\d+$/.test(username)) {
-    const profile = await bambu("/v1/design-user-service/my/preference", options);
-    const uid = (await profile.json().catch(() => null))?.uid;
+    const profile = await bambu("identificacao_mqtt", "/v1/design-user-service/my/preference", options);
+    const uid = profile.uid;
     const numericUid = typeof uid === "string" || Number.isSafeInteger(uid);
-    if (!profile.ok || !numericUid || !/^\d+$/.test(String(uid))) {
-      return error("A Bambu Cloud não forneceu a identificação MQTT da conta.", 502);
+    if (!numericUid || !/^\d+$/.test(String(uid))) {
+      throw new BambuError("A Bambu Cloud não forneceu a identificação MQTT da conta.", "identificacao_mqtt", "invalid_response");
     }
     username = "u_" + uid;
   }
@@ -118,7 +165,10 @@ export default {
     if (["/bambu/test", "/bambu/session", "/bambu/telemetry", "/bambu/logout"].includes(path)) {
       try {
         return await privateRoute(request, env, path, url);
-      } catch {
+      } catch (cause) {
+        if (cause instanceof BambuError) {
+          return json({ error: cause.message, ...cause.diagnostic }, cause.status);
+        }
         return error("Falha ao acessar o serviço. Confira a configuração e tente novamente.", 502);
       }
     }
