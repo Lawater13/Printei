@@ -24,14 +24,27 @@ jobs:
         run: |
           go install github.com/tc-hib/go-winres@v0.3.3
           "$(go env GOPATH)/bin/go-winres" simply --icon logo.png --manifest gui
+          go mod download github.com/jchv/go-webview2
+          dep="$(go list -m -f '{{.Dir}}' github.com/jchv/go-webview2)"
+          cp -R "$dep" "$RUNNER_TEMP/printei-webview2"
+          chmod -R u+w "$RUNNER_TEMP/printei-webview2"
+          python3 - "$RUNNER_TEMP/printei-webview2/webview.go" <<'PY'
+          import pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          old = "w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)"
+          assert s.count(old) == 1, "Unexpected WebView2 source"
+          p.write_text(s.replace(old, "w32.User32ShowWindow.Call(w.hwnd, 3)")) # SW_SHOWMAXIMIZED
+          PY
+          go mod edit -replace=github.com/jchv/go-webview2="$RUNNER_TEMP/printei-webview2"
           go mod tidy
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-H windowsgui" -o Printei-V8.19-Portable.exe .
-          sha256sum Printei-V8.19-Portable.exe > SHA256.txt
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-H windowsgui" -o Printei-V8.20-Portable.exe .
+          sha256sum Printei-V8.20-Portable.exe > SHA256.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Printei-V8.19-Portable
+          name: Printei-V8.20-Portable
           path: |
-            app/Printei-V8.19-Portable.exe
+            app/Printei-V8.20-Portable.exe
             app/SHA256.txt
       - name: Publish official release
         if: github.ref == 'refs/heads/main'
@@ -39,4 +52,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v8.19 Printei-V8.19-Portable.exe SHA256.txt --target "$GITHUB_SHA" --title "Printei V8.19" --notes "WebView2: janela nativa e ícone próprio. Use a exportação/importação para transferir dados do perfil Edge. O backup V8.18 permanece disponível." --latest
+          if gh release view v8.20 >/dev/null 2>&1; then exit 0; fi
+          gh release create v8.20 Printei-V8.20-Portable.exe SHA256.txt --target "$GITHUB_SHA" --title "Printei V8.20" --notes "WebView2: janela maximizada desde a primeira exibição e ícone próprio. Use a exportação/importação para transferir dados do perfil Edge. O backup V8.18 permanece disponível." --latest
