@@ -1,3 +1,4 @@
+// Worker isolado para a validação MQTT da branch experimental.
 {
   "name": "printei-cloud-experimental",
   "main": "worker.js",
