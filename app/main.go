@@ -30,7 +30,7 @@ import (
 //go:embed index.html logo.svg
 var assets embed.FS
 
-var version = "8.19"
+var version = "8.20"
 const origin = "http://127.0.0.1:43871"
 const addr = "127.0.0.1:43871"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
