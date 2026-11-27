@@ -1,10 +1,10 @@
-name: Printei WebView2 experimental
+name: Printei WebView2 build and release
 on:
   push:
-    branches: [experimental-webview2]
+    branches: [main, experimental-webview2]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,11 +25,18 @@ jobs:
           go install github.com/tc-hib/go-winres@v0.3.3
           "$(go env GOPATH)/bin/go-winres" simply --icon logo.png --manifest gui
           go mod tidy
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-H windowsgui" -o Printei-V8.18-WebView2-TESTE.exe .
-          sha256sum Printei-V8.18-WebView2-TESTE.exe > SHA256.txt
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-H windowsgui" -o Printei-V8.19-Portable.exe .
+          sha256sum Printei-V8.19-Portable.exe > SHA256.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Printei-V8.18-WebView2-TESTE
+          name: Printei-V8.19-Portable
           path: |
-            app/Printei-V8.18-WebView2-TESTE.exe
+            app/Printei-V8.19-Portable.exe
             app/SHA256.txt
+      - name: Publish official release
+        if: github.ref == 'refs/heads/main'
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v8.19 Printei-V8.19-Portable.exe SHA256.txt --target "$GITHUB_SHA" --title "Printei V8.19" --notes "WebView2: janela nativa e ícone próprio. Use a exportação/importação para transferir dados do perfil Edge. O backup V8.18 permanece disponível." --latest
