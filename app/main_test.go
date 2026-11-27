@@ -6,6 +6,7 @@ func TestVersions(t *testing.T){
 func TestManifest(t *testing.T){
  m:=manifest{Version:"7.1",URL:releasePrefix+"v7.1/Printei-V7.1-Portable.exe",SHA:strings.Repeat("a",64)}
  if e:=valid(m);e!=nil{t.Fatal(e)}
+ m.URL=releasePrefix+"experimental-v7.1/Printei-V7.1-Experimental-Portable.exe";if valid(m)==nil{t.Fatal("experimental channel accepted")}
  m.URL="https://example.com/x.exe";if valid(m)==nil{t.Fatal("external host accepted")}
 }
 func TestHash(t *testing.T){
@@ -15,7 +16,7 @@ func TestHash(t *testing.T){
 
 func TestUI(t *testing.T){
  html:="<!doctype html><html>teste</html>";h:=sha256.Sum256([]byte(html))
- p:=uiPackage{Version:"7.3",Core:version,Commit:strings.Repeat("a",40),SHA:hex.EncodeToString(h[:]),HTML:html}
+ p:=uiPackage{Version:"999999.999999",Core:version,Commit:strings.Repeat("a",40),SHA:hex.EncodeToString(h[:]),HTML:html}
  if !uiVerify(p){t.Fatal("valid interface rejected")}
  p.HTML+="changed";if uiVerify(p){t.Fatal("invalid interface accepted")}
  p.HTML=html;p.Core="6.0";if uiVerify(p){t.Fatal("incompatible core accepted")}
