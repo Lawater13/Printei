@@ -159,9 +159,15 @@ async function privateRoute(request, env, path, url) {
   }
   if (!session) return error("Sessão ausente ou expirada. Entre novamente com o código de e-mail.", 401);
   if (path === "/bambu/session") {
+    const devices = await Promise.all(session.devices.map(async ({ name, model, serial }) => {
+      const identity = encoder.encode(JSON.stringify(["printei-monitor-v1", session.username, serial]));
+      const digest = await crypto.subtle.digest("SHA-256", identity);
+      const monitorId = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      return { name, model, monitorId };
+    }));
     return json({
       expiresAt: new Date(session.expiresAt).toISOString(),
-      devices: session.devices.map(({ name, model }) => ({ name, model }))
+      devices
     });
   }
   const device = Number.isInteger(body.device) ? session.devices[body.device] : null;
