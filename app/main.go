@@ -30,10 +30,10 @@ import (
 //go:embed index.html logo.svg printer-cloud.js
 var assets embed.FS
 
-var version = "8.22"
+var version = "8.23"
 const origin = "http://127.0.0.1:43872"
 const addr = "127.0.0.1:43872"
-const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
+const feed = "https://raw.githubusercontent.com/Lawater13/Printei/experimental/windows-v8.22-cloud/experimental-update.json"
 const releasePrefix = "https://github.com/Lawater13/Printei/releases/download/"
 var verPattern = regexp.MustCompile("^[0-9]{1,6}\\.[0-9]{1,6}$")
 var user32 = syscall.NewLazyDLL("user32.dll")
@@ -67,7 +67,7 @@ func get(u string,max int64)([]byte,error){
 }
 func valid(m manifest) error {
  if !verPattern.MatchString(m.Version){return errors.New("Versão inválida")}
- expected:=releasePrefix+"v"+m.Version+"/Printei-V"+m.Version+"-Portable.exe"
+ expected:=releasePrefix+"experimental-v"+m.Version+"/Printei-V"+m.Version+"-Experimental-Portable.exe"
  u,e:=url.Parse(m.URL)
  if e!=nil||m.URL!=expected||u.Scheme!="https"||u.User!=nil{return errors.New("Endereço de atualização inválido")}
  h,e:=hex.DecodeString(m.SHA);if e!=nil||len(h)!=32{return errors.New("SHA-256 inválido")};return nil
@@ -85,7 +85,7 @@ func verify(b []byte,m manifest) error{
  if e!=nil||len(b)<2||string(b[:2])!="MZ"||!bytes.Equal(h[:],want){return errors.New("Integridade do executável inválida")}
  return nil
 }
-const uiFeed = "https://raw.githubusercontent.com/Lawater13/Printei/main/ui-update.json"
+const uiFeed = "https://raw.githubusercontent.com/Lawater13/Printei/experimental/windows-v8.22-cloud/experimental-ui-update.json"
 type uiPackage struct { Version string `json:"version"`; Core string `json:"core"`; Commit string `json:"commit"`; SHA string `json:"sha256"`; HTML string `json:"html,omitempty"` }
 var uiMu sync.RWMutex
 var uiCurrent uiPackage
@@ -275,7 +275,7 @@ func main(){
  shell32:=syscall.NewLazyDLL("shell32.dll")
  appID,_:=syscall.UTF16PtrFromString("Printei.WebView2.Experimental")
  shell32.NewProc("SetCurrentProcessExplicitAppUserModelID").Call(uintptr(unsafe.Pointer(appID)))
- w:=webview2.NewWithOptions(webview2.WebViewOptions{AutoFocus:true,DataPath:profile,WindowOptions:webview2.WindowOptions{Title:"Printei V8.22 experimental",Width:1280,Height:800,Center:true,IconId:1}})
+ w:=webview2.NewWithOptions(webview2.WebViewOptions{AutoFocus:true,DataPath:profile,WindowOptions:webview2.WindowOptions{Title:"Printei V"+version+" experimental",Width:1280,Height:800,Center:true,IconId:1}})
  if w==nil{notice("WebView2 indisponível. Instale o runtime Microsoft Edge WebView2 ou use a versão de backup.",16);return}
  defer w.Destroy()
  user32.NewProc("ShowWindow").Call(uintptr(w.Window()),3)
