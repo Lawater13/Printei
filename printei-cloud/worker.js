@@ -2,6 +2,7 @@ import { connect } from "cloudflare:sockets";
 import { readTelemetry } from "./mqtt.js";
 import { tokenClaims } from "./session.js";
 import { monitorView, normalizeTasks, staleAfterMs } from "./monitor.js";
+import { desktopStatePattern, desktopStart, desktopFinish, desktopGrant, verifyDesktopGrant, verifyAccessAssertion } from "./desktop.js";
 import { panel } from "./panel.js";
 
 export { BambuSession } from "./session.js";
@@ -139,7 +140,10 @@ async function privateRoute(request, env, path, url) {
   }
   if (!env.PRINTEI_ADMIN_KEY) return error("Configure PRINTEI_ADMIN_KEY nos segredos do Worker.", 503);
   const body = await request.json().catch(() => null);
-  if (!await authorized(body?.key, env.PRINTEI_ADMIN_KEY)) return error("Chave de acesso inválida.", 403);
+  const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
+  const desktop = (path === "/bambu/session" || path === "/bambu/telemetry") &&
+    await verifyDesktopGrant(assertion, body?.desktopGrant, env.PRINTEI_ADMIN_KEY);
+  if (!desktop && !await authorized(body?.key, env.PRINTEI_ADMIN_KEY)) return error("Chave de acesso inválida.", 403);
   if (path === "/bambu/test") return authenticate(body, env);
   const store = sessionStore(env);
   if (path === "/bambu/logout") {
@@ -210,10 +214,35 @@ async function privateRoute(request, env, path, url) {
   }
 }
 
+async function desktopRoute(request, env, url) {
+  const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
+  if (!env.PRINTEI_ADMIN_KEY || !assertion) return error("Entre pelo Cloudflare Access para conectar.", 403);
+  if (request.method === "GET") {
+    const state = url.searchParams.get("state");
+    return desktopStatePattern.test(state ?? "") ? desktopStart(state) : error("Conexão inválida.", 400);
+  }
+  if (request.method !== "POST" || request.headers.get("Origin") !== url.origin) return error("Conexão inválida.", 403);
+  const form = await request.formData().catch(() => null);
+  const state = form?.get("state");
+  if (typeof state !== "string" || !desktopStatePattern.test(state) ||
+      !await authorized(form?.get("key"), env.PRINTEI_ADMIN_KEY)) return error("Conexão inválida.", 403);
+  const issuer = env.PRINTEI_ACCESS_ISSUER;
+  const accepted = await verifyAccessAssertion(assertion, issuer, env.PRINTEI_ACCESS_AUDIENCE, async () => {
+    const keys = await fetch(issuer + "/cdn-cgi/access/certs", {
+      redirect: "manual", signal: AbortSignal.timeout(5000), cf: { cacheTtl: 300 }
+    });
+    return keys.ok ? (await keys.json()).keys : null;
+  });
+  if (!accepted) return error("O Worker não confirmou a sessão do Cloudflare Access.", 403);
+  const grant = await desktopGrant(assertion, env.PRINTEI_ADMIN_KEY);
+  return grant ? desktopFinish(state, assertion, grant) : error("Sessão do Cloudflare Access expirada.", 403);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+    if (path === "/desktop/connect") return desktopRoute(request, env, url);
     if (["/bambu/test", "/bambu/session", "/bambu/telemetry", "/bambu/logout"].includes(path)) {
       try {
         return await privateRoute(request, env, path, url);
