@@ -1,39 +1,290 @@
 import { connect } from "cloudflare:sockets";
-export default { async fetch(request, env) {
- const path=new URL(request.url).pathname;
- const headers={"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"};
- if(path==="/bambu/test"){
- if(request.method!=="POST" || request.headers.get("Origin")!==new URL(request.url).origin) return Response.json({error:"Requisição inválida"},{status:403,headers});
- if(!env.PRINTEI_ADMIN_KEY) return Response.json({error:"Configure PRINTEI_ADMIN_KEY nas variáveis secretas do Worker."},{status:503,headers});
- const body=await request.json().catch(()=>null);
- if(!body || typeof body.key!=="string" || body.key!==env.PRINTEI_ADMIN_KEY) return Response.json({error:"Chave de acesso inválida"},{status:403,headers});
- const email=String(body.email||"").trim(),code=String(body.code||"").trim();
- if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254|| (code&&!/^\d{6}$/.test(code)))return Response.json({error:"Confira o e-mail e o código de seis dígitos."},{status:400,headers});
- try{
- const endpoint=code?"login":"sendemail/code";
- const upstream=await fetch("https://api.bambulab.com/v1/user-service/user/"+endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(code?{account:email,code}:{email,type:"codeLogin"}),redirect:"manual",signal:AbortSignal.timeout(20000)});
- if(upstream.status>=300&&upstream.status<400)return Response.json({error:"A API Bambu respondeu com redirecionamento. Não seguimos redirecionamentos de credenciais.",upstreamStatus:upstream.status},{status:502,headers});
- const result=await upstream.json().catch(()=>null);
- if(!upstream.ok||!result)return Response.json({error:"Bambu Cloud recusou a solicitação ou retornou uma resposta incompatível.",upstreamStatus:upstream.status},{status:502,headers});
- if(!code && result.code!=null && ![0,200,"0","200"].includes(result.code))return Response.json({error:"A Bambu retornou um código de aplicação diferente de sucesso.",applicationCode:typeof result.code==="number"?result.code:null},{status:502,headers});
- if(!code)return Response.json({message:"Solicitação enviada. Confira se o código chegou ao e-mail.",authenticated:false},{headers});
- if(typeof result.accessToken!=="string")return Response.json({error:"A Bambu Cloud não retornou um token. Confira o código ou o método de autenticação."},{status:401,headers});
- const devices=await fetch("https://api.bambulab.com/v1/iot-service/api/user/bind",{headers:{Authorization:"Bearer "+result.accessToken},redirect:"manual",signal:AbortSignal.timeout(20000)});
- const d=await devices.json().catch(()=>null);
- const list=Array.isArray(d?.devices)?d.devices:null;
- return Response.json({authenticated:true,deviceLookup:devices.ok&&list!==null,devices:devices.ok&&list?list.map(x=>({name:String(x.name||x.dev_name||"Impressora"),model:String(x.dev_model_name||x.model||""),online:typeof x.online==="boolean"?x.online:null})):[],message:"Teste de autenticação concluído. O token não foi armazenado."},{headers});
- }catch(e){return Response.json({error:"Falha de comunicação com a Bambu Cloud.",stage:code?"verificacao":"solicitacao",category:e?.name==="TimeoutError"||e?.name==="AbortError"?"timeout":e?.name==="TypeError"?"network":"runtime"},{status:502,headers});}
- }
- if(request.method!=="GET") return new Response("Method not allowed",{status:405,headers});
- if(path==="/health") return Response.json({service:"printei-cloud",stage:"auth-diagnostic-v3",printerConnected:false},{headers});
- if(path==="/diagnostic"){
- let socket,timer;try{
- socket=connect({hostname:"us.mqtt.bambulab.com",port:8883},{secureTransport:"on"});
- await Promise.race([socket.opened,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("timeout")),5000)})]);
- return Response.json({tls:true,mqttAuthenticated:false,printerConnected:false},{headers});
- }catch{return Response.json({tls:false,mqttAuthenticated:false,printerConnected:false},{status:503,headers});}
- finally{clearTimeout(timer);if(socket)try{await socket.close()}catch{}}
- }
- if(path!=="/")return new Response("Not found",{status:404,headers});
- return new Response('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Printei Cloud</title><style>body{background:#15121b;color:#eee;font:16px system-ui;margin:40px}main{max-width:700px;margin:auto;background:#201d27;padding:28px;border-radius:16px}a{color:#c084fc}</style><main><h1>Printei Cloud</h1><p>Serviço experimental. Nenhuma impressora conectada.</p><p><a href="/diagnostic">Testar conexão TLS com Bambu Cloud</a></p><p>O teste TLS não autentica nem envia comandos à impressora.</p><hr><h2>Vincular conta — teste v3</h2><form id="auth"><p><label>Chave privada do Printei <input id="key" type="password" required autocomplete="off"></label></p><p><label>E-mail Bambu Lab <input id="email" type="email" required autocomplete="email"></label></p><p><button type="button" id="send">Solicitar código</button></p><p><label>Código de e-mail <input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label></p><button type="submit">Testar autenticação</button></form><pre id="result" style="white-space:pre-wrap"></pre><script>const f=document.getElementById("auth"),out=document.getElementById("result");async function run(verify){if(!f.reportValidity())return;const code=verify?document.getElementById("code").value.trim():"";if(verify&&!/^[0-9]{6}$/.test(code)){out.textContent="Informe seis dígitos.";return}const buttons=f.querySelectorAll("button");buttons.forEach(b=>b.disabled=true);out.textContent="Consultando Bambu Cloud...";try{const r=await fetch("/bambu/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:document.getElementById("key").value,email:document.getElementById("email").value,code})});out.textContent=JSON.stringify(await r.json(),null,2)}catch{out.textContent="Falha na solicitação."}finally{buttons.forEach(b=>b.disabled=false);if(verify)document.getElementById("code").value=""}}document.getElementById("send").onclick=()=>run(false);f.onsubmit=e=>{e.preventDefault();run(true)}</script></main></html>',{headers:{...headers,"Content-Type":"text/html; charset=utf-8"}});
- }};
+import { readTelemetry } from "./mqtt.js";
+import { tokenClaims } from "./session.js";
+import { monitorView, normalizeTasks, staleAfterMs } from "./monitor.js";
+import { desktopStatePattern, desktopStart, desktopFailure, desktopFinish, desktopGrant, verifyDesktopGrant, verifyAccessAssertion } from "./desktop.js";
+import { panel } from "./panel.js";
+
+export { BambuSession } from "./session.js";
+
+const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
+const api = "https://api.bambulab.com";
+const encoder = new TextEncoder();
+const json = (body, status = 200) => Response.json(body, { status, headers });
+const error = (message, status) => json({ error: message }, status);
+
+async function authorized(key, secret) {
+  if (typeof key !== "string" || key.length > 1024) return false;
+  const digest = value => crypto.subtle.digest("SHA-256", encoder.encode(value));
+  const [provided, expected] = await Promise.all([digest(key), digest(secret)]);
+  return crypto.subtle.timingSafeEqual(provided, expected);
+}
+
+class BambuError extends Error {
+  constructor(message, stage, category, status = 502, details = {}) {
+    super(message);
+    this.status = status;
+    this.diagnostic = { stage, category, ...details };
+  }
+}
+
+async function bambu(stage, path, options = {}) {
+  let response;
+  try {
+    response = await fetch(api + path, { ...options, redirect: "manual", signal: options.signal ?? AbortSignal.timeout(20000) });
+    const upstreamStatus = response.status;
+    const details = { upstreamStatus };
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      if (upstreamStatus >= 300 && upstreamStatus < 400) {
+        throw new BambuError("A Bambu Cloud respondeu com um redirecionamento bloqueado.", stage, "redirect", 502, details);
+      }
+      if (upstreamStatus === 429) {
+        throw new BambuError("A Bambu Cloud limitou as solicitações. Aguarde antes de tentar novamente.", stage, "rate_limit", 429, details);
+      }
+      if (upstreamStatus === 401 || upstreamStatus === 403) {
+        throw new BambuError("A Bambu Cloud recusou o acesso nesta etapa.", stage, "access_denied", 502, details);
+      }
+      throw new BambuError("A Bambu Cloud retornou um erro HTTP.", stage, "http_error", 502, details);
+    }
+    const result = await response.json();
+    if (result && typeof result === "object" && !Array.isArray(result)) return result;
+    throw new SyntaxError("Expected a JSON object");
+  } catch (cause) {
+    if (cause instanceof BambuError) throw cause;
+    const details = response ? { upstreamStatus: response.status } : {};
+    if (cause?.name === "SyntaxError") {
+      throw new BambuError("A Bambu Cloud retornou uma resposta em formato inesperado.", stage, "invalid_response", 502, details);
+    }
+    if (["TimeoutError", "AbortError"].includes(cause?.name)) {
+      throw new BambuError("A Bambu Cloud demorou demais para responder.", stage, "timeout", 504, details);
+    }
+    const category = cause?.name === "TypeError" ? "network" : "runtime";
+    throw new BambuError("Falha de comunicação com a Bambu Cloud.", stage, category, 502, details);
+  }
+}
+
+function applicationError(message, stage, code, status) {
+  const applicationCode = (typeof code === "number" || typeof code === "string") &&
+    /^-?\d{1,9}$/.test(String(code)) ? Number(code) : undefined;
+  return new BambuError(message, stage, "application_error", status, { applicationCode });
+}
+
+async function authenticate(body, env) {
+  const email = String(body.email || "").trim();
+  const code = String(body.code || "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || (code && !/^\d{6}$/.test(code))) {
+    return error("Confira o e-mail e o código de seis dígitos.", 400);
+  }
+  if (code && body.save && !/^[0-9a-f]{64}$/i.test(env.PRINTEI_SESSION_KEY ?? "")) {
+    return error("Configure PRINTEI_SESSION_KEY nos segredos do Worker.", 503);
+  }
+  const endpoint = code ? "login" : "sendemail/code";
+  const stage = code ? "verificacao" : "solicitacao";
+  const result = await bambu(stage, "/v1/user-service/user/" + endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(code ? { account: email, code } : { email, type: "codeLogin" })
+  });
+  if (!code) {
+    if (result.code != null && ![0, 200, "0", "200"].includes(result.code)) {
+      throw applicationError("A Bambu Cloud recusou o envio do código.", stage, result.code, 502);
+    }
+    return json({ authenticated: false, message: "Solicitação enviada. Confira seu e-mail." });
+  }
+  const token = result.accessToken;
+  if (typeof token !== "string" || !token || token.length > 8192) {
+    throw applicationError("A Bambu Cloud não retornou uma sessão válida. Confira o código.", stage, result.code, 401);
+  }
+  const options = { headers: { Authorization: "Bearer " + token } };
+  const devices = await bambu("impressoras", "/v1/iot-service/api/user/bind", options);
+  const list = devices.devices;
+  const deviceLookup = Array.isArray(list);
+  const validDevices = deviceLookup ? list.flatMap(device => {
+    if (!device || !/^[A-Za-z0-9]{1,64}$/.test(device.dev_id ?? "")) return [];
+    return [{
+      serial: device.dev_id,
+      name: String(device.name || device.dev_name || "Impressora").slice(0, 120),
+      model: String(device.dev_model_name || device.model || "").slice(0, 40),
+      online: typeof device.online === "boolean" ? device.online : null
+    }];
+  }) : [];
+  const summary = validDevices.map(({ name, model, online }) => ({ name, model, online }));
+  if (!body.save) return json({ authenticated: true, deviceLookup, devices: summary });
+  if (!deviceLookup) {
+    throw new BambuError("A Bambu Cloud retornou uma lista de impressoras em formato inesperado.", "impressoras", "invalid_response");
+  }
+  if (!validDevices.length) return error("Nenhuma impressora vinculada disponível para monitoramento.", 422);
+  let username = tokenClaims(token)?.username;
+  if (typeof username !== "string" || !/^u_\d+$/.test(username)) {
+    const profile = await bambu("identificacao_mqtt", "/v1/design-user-service/my/preference", options);
+    const uid = profile.uid;
+    const numericUid = typeof uid === "string" || Number.isSafeInteger(uid);
+    if (!numericUid || !/^\d+$/.test(String(uid))) {
+      throw new BambuError("A Bambu Cloud não forneceu a identificação MQTT da conta.", "identificacao_mqtt", "invalid_response");
+    }
+    username = "u_" + uid;
+  }
+  await sessionStore(env).save({ token, username, devices: validDevices });
+  return json({ authenticated: true, devices: summary, message: "Sessão salva." });
+}
+
+function sessionStore(env) {
+  const namespace = env.BAMBU_SESSION;
+  return namespace.get(namespace.idFromName("owner"));
+}
+
+async function privateRoute(request, env, path, url) {
+  if (request.method !== "POST" || request.headers.get("Origin") !== url.origin) {
+    return error("Requisição inválida.", 403);
+  }
+  if (!env.PRINTEI_ADMIN_KEY) return error("Configure PRINTEI_ADMIN_KEY nos segredos do Worker.", 503);
+  const body = await request.json().catch(() => null);
+  const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
+  const desktop = (path === "/bambu/session" || path === "/bambu/telemetry") &&
+    await verifyDesktopGrant(assertion, body?.desktopGrant, env.PRINTEI_ADMIN_KEY);
+  if (!desktop && !await authorized(body?.key, env.PRINTEI_ADMIN_KEY)) return error("Chave de acesso inválida.", 403);
+  if (path === "/bambu/test") return authenticate(body, env);
+  const store = sessionStore(env);
+  if (path === "/bambu/logout") {
+    await store.clear();
+    return json({ message: "Sessão removida do Printei Cloud." });
+  }
+  let session;
+  try {
+    session = await store.load();
+  } catch {
+    console.warn({ event: "bambu_session_read_failed" });
+    return json({ error: "Falha ao abrir a sessão Bambu salva.", stage: "sessao", category: "storage" }, 502);
+  }
+  if (!session) return error("Sessão ausente ou expirada. Entre novamente com o código de e-mail.", 401);
+  if (path === "/bambu/session") {
+    return json({
+      expiresAt: new Date(session.expiresAt).toISOString(),
+      devices: session.devices.map(({ name, model }) => ({ name, model }))
+    });
+  }
+  const device = Number.isInteger(body.device) ? session.devices[body.device] : null;
+  if (!device) return error("Selecione uma impressora vinculada.", 400);
+  let previous;
+  try {
+    previous = await store.monitor(session.username, device.serial);
+  } catch {
+    console.warn({ event: "bambu_monitor_storage_failed" });
+    return json({ error: "Falha ao acessar o histórico da impressora.", stage: "monitoramento", category: "storage" }, 502);
+  }
+  const at = Date.now();
+  const authOptions = { headers: { Authorization: "Bearer " + session.token } };
+  const mqtt = readTelemetry(connect, session, device.serial);
+  const cloud = at - (previous?.cloudAttemptAt ?? 0) >= staleAfterMs
+    ? bambu("historico", "/v1/user-service/my/tasks?limit=30&deviceId=" + encodeURIComponent(device.serial),
+        { ...authOptions, signal: AbortSignal.timeout(3000) })
+      .then(raw => ({ at, tasks: normalizeTasks(raw, device.serial) }), () => ({ at, tasks: null }))
+    : null;
+  const [{ samples = [], ...result }, taskUpdate] = await Promise.all([mqtt, cloud]);
+  if (result.status !== "received") {
+    console.warn({ event: "bambu_telemetry", status: result.status, stage: result.stage,
+      brokerCode: result.brokerCode });
+  }
+  try {
+    let availability = null;
+    if (!samples.some(sample => !sample.retained)) {
+      const lastCheck = Math.max(previous?.lastReportAt ?? 0, previous?.availability?.at ?? 0);
+      if (Date.now() - lastCheck > staleAfterMs) {
+        const at = Date.now();
+        try {
+          const devices = await bambu("impressoras", "/v1/iot-service/api/user/bind", {
+            ...authOptions,
+            signal: AbortSignal.timeout(3000)
+          });
+          const online = Array.isArray(devices.devices)
+            ? devices.devices.find(item => item?.dev_id === device.serial)?.online : undefined;
+          availability = { at, online: typeof online === "boolean" ? online : null };
+        } catch {
+          availability = { at, online: null };
+        }
+      }
+    }
+    const snapshot = samples.length || availability || taskUpdate
+      ? await store.monitor(session.username, device.serial, samples, availability, taskUpdate) : previous;
+    return json({ ...result, ...monitorView(snapshot) });
+  } catch {
+    console.warn({ event: "bambu_monitor_storage_failed" });
+    return json({ error: "Falha ao acessar o histórico da impressora.", stage: "monitoramento", category: "storage" }, 502);
+  }
+}
+
+async function desktopRoute(request, env, url) {
+  const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
+  if (!env.PRINTEI_ADMIN_KEY || !assertion) return desktopFailure("Entre pelo Cloudflare Access para conectar.", 403);
+  if (request.method === "GET") {
+    const state = url.searchParams.get("state");
+    return desktopStatePattern.test(state ?? "") ? desktopStart(state)
+      : desktopFailure("O código de conexão do aplicativo está ausente ou é inválido.", 400);
+  }
+  if (request.method !== "POST" || request.headers.get("Origin") !== url.origin) {
+    return desktopFailure("O navegador não confirmou a origem do formulário.", 403);
+  }
+  const form = await request.formData().catch(() => null);
+  const state = form?.get("state");
+  if (typeof state !== "string" || !desktopStatePattern.test(state)) {
+    return desktopFailure("O código de conexão do aplicativo está ausente ou é inválido.", 400);
+  }
+  if (!await authorized(form?.get("key"), env.PRINTEI_ADMIN_KEY)) {
+    return desktopFailure("A chave privada do Printei foi recusada.", 403, state);
+  }
+  const issuer = env.PRINTEI_ACCESS_ISSUER;
+  const accepted = await verifyAccessAssertion(assertion, issuer, env.PRINTEI_ACCESS_AUDIENCE, async () => {
+    const keys = await fetch(issuer + "/cdn-cgi/access/certs", {
+      redirect: "manual", signal: AbortSignal.timeout(5000), cf: { cacheTtl: 300 }
+    });
+    return keys.ok ? (await keys.json()).keys : null;
+  });
+  if (!accepted) return desktopFailure("O Worker não confirmou a sessão do Cloudflare Access.", 403, state);
+  const grant = await desktopGrant(assertion, env.PRINTEI_ADMIN_KEY);
+  return grant ? desktopFinish(state, assertion, grant)
+    : desktopFailure("A sessão do Cloudflare Access expirou.", 403, state);
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    if (path === "/desktop/connect") return desktopRoute(request, env, url);
+    if (["/bambu/test", "/bambu/session", "/bambu/telemetry", "/bambu/logout"].includes(path)) {
+      try {
+        return await privateRoute(request, env, path, url);
+      } catch (cause) {
+        if (cause instanceof BambuError) {
+          return json({ error: cause.message, ...cause.diagnostic }, cause.status);
+        }
+        return error("Falha ao acessar o serviço. Confira a configuração e tente novamente.", 502);
+      }
+    }
+    if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers });
+    if (path === "/health") return json({ service: "printei-cloud", stage: "mqtt-experimental" });
+    if (path === "/diagnostic") {
+      let socket, timer;
+      try {
+        socket = connect({ hostname: "us.mqtt.bambulab.com", port: 8883 }, { secureTransport: "on" });
+        socket.closed.catch(() => {});
+        await Promise.race([socket.opened, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("TLS timeout")), 5000);
+        })]);
+        return json({ tls: true, mqttAuthenticated: false, printerConnected: false });
+      } catch {
+        return json({ tls: false, mqttAuthenticated: false, printerConnected: false }, 503);
+      } finally {
+        clearTimeout(timer);
+        socket?.close().catch(() => {});
+      }
+    }
+    if (path !== "/") return new Response("Not found", { status: 404, headers });
+    return new Response(panel, { headers: {
+      ...headers,
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      "Referrer-Policy": "no-referrer"
+    } });
+  }
+};

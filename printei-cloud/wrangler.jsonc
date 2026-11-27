@@ -1,7 +1,16 @@
+// Worker isolado para a validação MQTT da branch experimental.
 {
-  "name": "printei-cloud",
+  "name": "printei-cloud-experimental",
   "main": "worker.js",
   "compatibility_date": "2026-01-01",
   "workers_dev": true,
-  "preview_urls": false
+  "preview_urls": false,
+  "vars": {
+    "PRINTEI_ACCESS_ISSUER": "https://suikeder.cloudflareaccess.com",
+    "PRINTEI_ACCESS_AUDIENCE": "80758e885e3b16bd0529edab8c3779f8b1cf663e7fef7a9753dcd5cc3ac6cced"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "BAMBU_SESSION", "class_name": "BambuSession" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BambuSession"] }]
 }
