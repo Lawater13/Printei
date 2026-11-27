@@ -58,13 +58,23 @@ export const panel = String.raw`<!doctype html>
     disconnected: "O broker fechou a conexão.",
     network_error: "Falha de comunicação com o broker MQTT."
   };
+  const mqttStages = {
+    tls: "conexão TLS", auth: "autenticação MQTT", subscribe: "assinatura MQTT", listening: "escuta MQTT"
+  };
   async function call(path, data = {}) {
     const response = await fetch("/bambu/" + path, {
       method: "POST",
+      redirect: "manual",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...data, key: key.value })
     });
-    const result = await response.json();
+    if (response.type === "opaqueredirect") {
+      throw new Error("A solicitação foi redirecionada. Reabra o painel para renovar o acesso.");
+    }
+    const result = await response.json().catch(() => null);
+    if (!result) {
+      throw new Error("O Worker retornou uma resposta inesperada (HTTP " + response.status + ").");
+    }
     if (response.status === 401 && (path === "telemetry" || path === "session")) {
       monitor.hidden = true;
       byId("auto").checked = false;
@@ -147,7 +157,11 @@ export const panel = String.raw`<!doctype html>
       const result = await call("telemetry", { device: Number(device.value) });
       render(result);
       if (result.status === "auth_refused") byId("auto").checked = false;
-      status.textContent = result.status === "received" ? "Relatório MQTT recebido." : states[result.status];
+      const stage = mqttStages[result.stage];
+      const brokerCode = Number.isInteger(result.brokerCode) ? " · código MQTT " + result.brokerCode : "";
+      status.textContent = result.status === "received" ? "Relatório MQTT recebido."
+        : (states[result.status] || "Resposta de telemetria inesperada.") +
+          (stage ? " (" + stage + brokerCode + ")" : "");
     });
   }
   byId("send").onclick = () => {

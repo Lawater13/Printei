@@ -24,12 +24,27 @@ function broker(replies, { stayOpen = false } = {}) {
     return {
       opened: Promise.resolve(),
       closed: Promise.resolve(),
-      readable: new ReadableStream({
-        start(controller) {
-          for (const reply of replies) controller.enqueue(Uint8Array.from(reply));
-          if (!stayOpen) controller.close();
-        }
-      }),
+      readable: { getReader: () => {
+        const stream = new ReadableStream({
+          start(controller) {
+            for (const reply of replies) controller.enqueue(Uint8Array.from(reply));
+            if (!stayOpen) controller.close();
+          }
+        });
+        const reader = stream.getReader();
+        let pending = false;
+        return {
+          async read() {
+            pending = true;
+            try { return await reader.read(); }
+            finally { pending = false; }
+          },
+          releaseLock() {
+            if (pending) throw new TypeError("Cannot release a reader with a pending read");
+            reader.releaseLock();
+          }
+        };
+      } },
       writable: new WritableStream({ write: frame => writes.push(frame) }),
       async close() { closed = true; }
     };
@@ -71,14 +86,14 @@ test("assina somente report e combina pacotes fragmentados sem publicar comandos
 
 test("distingue inscrição aceita sem relatório, token recusado e inscrição recusada", async () => {
   const connack = [0x20, 2, 0, 0];
-  for (const [replies, status] of [
-    [[connack, [0x90, 3, 0, 1, 0]], "no_report"],
-    [[[0x20, 2, 0, 5]], "auth_refused"],
-    [[connack, [0x90, 3, 0, 1, 0x80]], "subscription_refused"],
-    [[[0x30, 0xff, 0xff, 0xff, 0xff]], "network_error"]
+  for (const [replies, expected] of [
+    [[connack, [0x90, 3, 0, 1, 0]], { status: "no_report", stage: "listening" }],
+    [[[0x20, 2, 0, 5]], { status: "auth_refused", stage: "auth", brokerCode: 5 }],
+    [[connack, [0x90, 3, 0, 1, 0x80]], { status: "subscription_refused", stage: "subscribe" }],
+    [[[0x30, 0xff, 0xff, 0xff, 0xff]], { status: "network_error", stage: "auth" }]
   ]) {
     const mock = broker(replies, { stayOpen: true });
-    assert.deepEqual(await readTelemetry(mock.connect, session, serial, 25), { status });
+    assert.deepEqual(await readTelemetry(mock.connect, session, serial, 25), expected);
     assert.ok(mock.isClosed());
   }
 });

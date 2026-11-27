@@ -111,8 +111,9 @@ export async function readTelemetry(connect, session, serial, windowMs = 8000) {
   const login = packet(0x10, join(field("MQTT"), [4, 0xc2, 0, 20],
     field(clientId), field(session.username), field(session.token)));
   const subscribe = packet(0x82, join([0, 1], field(topic), [0]));
-  let socket, reader, writer, timer;
-  let phase = "connect";
+  let socket, timer;
+  let phase = "tls";
+  let failure;
   let receivedAt = null;
   let expired = false;
   const telemetry = {};
@@ -129,8 +130,9 @@ export async function readTelemetry(connect, session, serial, windowMs = 8000) {
     const listen = async () => {
       await socket.opened;
       if (expired) return;
-      reader = socket.readable.getReader();
-      writer = socket.writable.getWriter();
+      phase = "auth";
+      const reader = socket.readable.getReader();
+      const writer = socket.writable.getWriter();
       await writer.write(login);
       let buffer = new Uint8Array();
       while (!expired) {
@@ -142,17 +144,18 @@ export async function readTelemetry(connect, session, serial, windowMs = 8000) {
         while (!expired && (frame = unpack(buffer))) {
           buffer = buffer.subarray(frame.end);
           const { type, body } = frame;
-          if (phase === "connect") {
+          if (phase === "auth") {
             if (type !== 0x20 || body.length !== 2 || body[0] !== 0) throw new Error("Invalid CONNACK");
             if (body[1] !== 0) {
-              phase = [4, 5].includes(body[1]) ? "auth_refused" : "broker_refused";
+              failure = { status: [4, 5].includes(body[1]) ? "auth_refused" : "broker_refused",
+                stage: phase, brokerCode: body[1] };
               return;
             }
             phase = "subscribe";
             await writer.write(subscribe);
           } else if (phase === "subscribe" && type === 0x90) {
             if (body.length !== 3 || body[0] !== 0 || body[1] !== 1 || body[2] !== 0) {
-              phase = "subscription_refused";
+              failure = { status: "subscription_refused", stage: phase };
               return;
             }
             phase = "listening";
@@ -163,17 +166,17 @@ export async function readTelemetry(connect, session, serial, windowMs = 8000) {
       }
     };
     await Promise.race([listen(), timeout]);
+    if (failure) return failure;
     if (phase === "listening") {
       if (receivedAt) return { status: "received", receivedAt, telemetry };
-      return { status: expired ? "no_report" : "disconnected" };
+      return { status: expired ? "no_report" : "disconnected", stage: phase };
     }
-    return { status: expired ? "timeout" : phase.endsWith("_refused") ? phase : "disconnected" };
+    return { status: expired ? "timeout" : "disconnected", stage: phase };
   } catch {
-    return { status: "network_error" };
+    return { status: "network_error", stage: phase };
   } finally {
     clearTimeout(timer);
-    reader?.releaseLock();
-    writer?.releaseLock();
-    socket?.close().catch(() => {});
+    // Closing the socket cancels pending stream I/O. workerd rejects releaseLock() while read() is pending.
+    void socket?.close().catch(() => {});
   }
 }

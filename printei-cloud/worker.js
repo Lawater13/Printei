@@ -145,7 +145,13 @@ async function privateRoute(request, env, path, url) {
     await store.clear();
     return json({ message: "Sessão removida do Printei Cloud." });
   }
-  const session = await store.load();
+  let session;
+  try {
+    session = await store.load();
+  } catch {
+    console.warn({ event: "bambu_session_read_failed" });
+    return json({ error: "Falha ao abrir a sessão Bambu salva.", stage: "sessao", category: "storage" }, 502);
+  }
   if (!session) return error("Sessão ausente ou expirada. Entre novamente com o código de e-mail.", 401);
   if (path === "/bambu/session") {
     return json({
@@ -155,7 +161,12 @@ async function privateRoute(request, env, path, url) {
   }
   const device = Number.isInteger(body.device) ? session.devices[body.device] : null;
   if (!device) return error("Selecione uma impressora vinculada.", 400);
-  return json(await readTelemetry(connect, session, device.serial));
+  const result = await readTelemetry(connect, session, device.serial);
+  if (result.status !== "received") {
+    console.warn({ event: "bambu_telemetry", status: result.status, stage: result.stage,
+      brokerCode: result.brokerCode });
+  }
+  return json(result);
 }
 
 export default {
