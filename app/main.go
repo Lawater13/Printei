@@ -30,7 +30,7 @@ import (
 //go:embed index.html logo.svg printer-cloud.js
 var assets embed.FS
 
-var version = "8.54"
+var version = "8.55"
 const origin = "http://127.0.0.1:43872"
 const addr = "127.0.0.1:43872"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
@@ -181,10 +181,14 @@ var pageGeneration uint64
 var activePage string
 
 const buttonScript = `<script>(function(){
-const b=document.getElementById('updateCheck');if(!b)return;
+const buttons=[];const mainButton=document.getElementById('updateCheck');if(mainButton)buttons.push(mainButton);
+const gate=document.getElementById('cloudGate');if(gate){const card=gate.querySelector('.cg-card');if(card){const b=document.createElement('button');b.type='button';b.id='loginUpdateCheck';b.textContent='↻ Atualizar Printei';b.style.cssText='width:100%;margin-top:14px;background:#332544;border:1px solid #a855f7;color:#e9d5ff;border-radius:9px;padding:12px';const note=card.querySelector('.cg-note');if(note)card.insertBefore(b,note);else card.append(b);buttons.push(b)}}
+let busy=false;
 async function request(path){const r=await fetch(path,{method:'POST',headers:{'X-Printei-Update':'1'},cache:'no-store'});const d=await r.json();if(!r.ok||d.error)throw Error(d.error||'Falha na atualização');return d}
-b.onclick=async()=>{b.disabled=true;b.textContent='Verificando…';try{const m=await request('/update/check');if(!m.available){alert('Você já está na versão '+m.current+'.');return}if(!await confirmPrintei('Printei '+m.version+' disponível. Deseja atualizar agora?'))return;b.textContent='Baixando…';const result=await request('/update/install');if(result.light){window.location.reload();return}b.textContent='Reiniciando…';alert('Atualização verificada. O Printei será reaberto. Se a janela antiga permanecer, feche apenas essa janela.');try{window.close()}catch{} }catch(e){alert('Não foi possível atualizar: '+e.message)}finally{b.disabled=false;b.textContent='↻ Atualizar'}};
-setTimeout(async()=>{try{let m=await request('/update/check');if(m.available&&!b.disabled)b.textContent='↻ Atualizar • '+m.version}catch{}},3000);
+function state(label,disabled){for(const b of buttons){b.disabled=disabled;b.textContent=label|| (b===mainButton?'↻ Atualizar':'↻ Atualizar Printei')}}
+async function update(){if(busy)return;busy=true;state('Verificando…',true);try{const m=await request('/update/check');if(!m.available){alert('Você já está na versão '+m.current+'.');return}const message='Printei '+m.version+' disponível. Deseja atualizar agora?';if(!window.confirm(message))return;state('Baixando…',true);const result=await request('/update/install');if(result.light){window.location.reload();return}state('Reiniciando…',true);alert('Atualização verificada. O Printei será reaberto.');try{window.close()}catch{}}catch(e){alert('Não foi possível atualizar: '+e.message)}finally{busy=false;state('',false)}}
+for(const b of buttons)b.onclick=update;
+setTimeout(async()=>{try{const m=await request('/update/check');if(m.available&&!busy)state('↻ Atualizar • '+m.version,false)}catch{}},3000);
 const pageID=crypto.randomUUID();
 function lifecycle(action){return fetch('/lifecycle/'+action,{method:'POST',headers:{'X-Printei-Lifecycle':'1','Content-Type':'text/plain'},body:pageID,keepalive:true,cache:'no-store'}).catch(()=>{})}
 lifecycle('open');
