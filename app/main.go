@@ -27,12 +27,12 @@ import (
  "unsafe"
 )
 
-//go:embed index.html logo.svg
+//go:embed index.html logo.svg printer-cloud.js
 var assets embed.FS
 
-var version = "8.20"
-const origin = "http://127.0.0.1:43871"
-const addr = "127.0.0.1:43871"
+var version = "8.22"
+const origin = "http://127.0.0.1:43872"
+const addr = "127.0.0.1:43872"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
 const releasePrefix = "https://github.com/Lawater13/Printei/releases/download/"
 var verPattern = regexp.MustCompile("^[0-9]{1,6}\\.[0-9]{1,6}$")
@@ -192,10 +192,13 @@ window.addEventListener('pageshow',()=>lifecycle('open'));
 window.addEventListener('pagehide',()=>lifecycle('close'));
 setInterval(()=>fetch('/status',{cache:'no-store'}).catch(()=>{}),20000);
 })();</script>`
+var printerCloudAPI = newPrinterCloud(printerCloudURL, origin)
+
 func serve(w http.ResponseWriter,r *http.Request){
  if r.Host!=addr{http.Error(w,"Host inválido",403);return}
  w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("Cache-Control","no-store")
  lastSeen.Store(time.Now().Unix())
+ if strings.HasPrefix(r.URL.Path,"/printer-cloud/"){printerCloudAPI.serve(w,r);return}
  switch r.URL.Path{
  case "/status":reply(w,map[string]string{"version":version,"app":"Printei"});return
  case "/lifecycle/open","/lifecycle/close":
@@ -236,6 +239,8 @@ func serve(w http.ResponseWriter,r *http.Request){
  case "/","/index.html":
   pageLifecycle.Lock();pageGeneration++;activePage="";pageLifecycle.Unlock()
   b,_:=assets.ReadFile("index.html");uiMu.RLock();if uiCurrent.HTML!=""{b=[]byte(uiCurrent.HTML)};uiMu.RUnlock();html:=strings.ReplaceAll(string(b),"Printei v6.2 Portable","Printei v"+uiVersion()+" Portable");html=strings.Replace(html,"</html>",buttonScript+"</html>",1);w.Header().Set("Content-Type","text/html; charset=utf-8");_,_=io.WriteString(w,html);return
+ case "/printer-cloud.js":
+  b,_:=assets.ReadFile("printer-cloud.js");w.Header().Set("Content-Type","text/javascript; charset=utf-8");_,_=w.Write(b);return
  case "/logo.svg","/icon-512.png","/icon-192.png","/favicon.ico":
   b,_:=assets.ReadFile("logo.svg");w.Header().Set("Content-Type","image/svg+xml");_,_=w.Write(b);return
  case "/manifest.webmanifest":
@@ -251,8 +256,8 @@ func main(){
  if len(os.Args)==6&&os.Args[1]=="--apply-update"{if e:=applyUpdate(os.Args[2],os.Args[3],os.Args[4],os.Args[5]);e!=nil{notice("Atualização não instalada: "+e.Error(),16)};return}
  if len(os.Args)==2&&os.Args[1]=="--version"{fmt.Println(version);return}
  root:=os.Getenv("LOCALAPPDATA");if root==""{notice("LOCALAPPDATA indisponível.",16);return}
- uiDir=filepath.Join(root,"Printei-WebView2-Test","Interface");loadUI()
- profile:=filepath.Join(root,"Printei-WebView2-Test","Perfil")
+ uiDir=filepath.Join(root,"Printei-V8.22-Experimental","Interface");loadUI()
+ profile:=filepath.Join(root,"Printei-V8.22-Experimental","Perfil")
  if e:=os.MkdirAll(profile,0700);e!=nil{notice(e.Error(),16);return}
  l,e:=net.Listen("tcp",addr);if e!=nil{notice("Feche a outra versão do Printei antes de abrir esta.",48);return}
  alarms.ack=make(map[string]bool)
@@ -263,9 +268,9 @@ func main(){
  runtime.LockOSThread()
  defer runtime.UnlockOSThread()
  shell32:=syscall.NewLazyDLL("shell32.dll")
- appID,_:=syscall.UTF16PtrFromString("Printei.WebView2")
+ appID,_:=syscall.UTF16PtrFromString("Printei.WebView2.Experimental")
  shell32.NewProc("SetCurrentProcessExplicitAppUserModelID").Call(uintptr(unsafe.Pointer(appID)))
- w:=webview2.NewWithOptions(webview2.WebViewOptions{AutoFocus:true,DataPath:profile,WindowOptions:webview2.WindowOptions{Title:"Printei",Width:1280,Height:800,Center:true,IconId:1}})
+ w:=webview2.NewWithOptions(webview2.WebViewOptions{AutoFocus:true,DataPath:profile,WindowOptions:webview2.WindowOptions{Title:"Printei V8.22 experimental",Width:1280,Height:800,Center:true,IconId:1}})
  if w==nil{notice("WebView2 indisponível. Instale o runtime Microsoft Edge WebView2 ou use a versão de backup.",16);return}
  defer w.Destroy()
  user32.NewProc("ShowWindow").Call(uintptr(w.Window()),3)
