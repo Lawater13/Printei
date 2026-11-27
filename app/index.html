@@ -747,7 +747,26 @@ function clearDrag(){if(ctx)for(const p of ctx.panels.values())p.node.classList.
 function mutate(id,fn,allowLocked=false){const x=item(id);if(!x||(!allowLocked&&x.locked))return;checkpoint();fn(x);if(x.hidden){selection.delete(id);selected=[...selection].at(-1)||''}apply(ctx,draft);if(!x.hidden)choose(id);else{select.value=selected;properties()}}
 function shift(id,delta){const x=item(id);if(!x||x.locked)return;const g=ctx.panels.get(id).g,arr=draft.items.filter(y=>ctx.panels.get(y.id).g===g),idx=arr.findIndex(y=>y.id===id),other=arr[idx+delta];if(!other||other.locked)return;checkpoint();const a=draft.items.indexOf(x),b=draft.items.indexOf(other);[draft.items[a],draft.items[b]]=[draft.items[b],draft.items[a]];x.col=0;apply(ctx,draft);choose(id)}
 function setStyle(p,x){p.node.style.setProperty('--editor-width',x.width);p.node.style.setProperty('--editor-col',x.col||'auto');p.node.style.setProperty('--editor-height',x.height+'px');if(Number.isFinite(x.fx)){p.node.style.setProperty('--free-x',x.fx+'%');p.node.style.setProperty('--free-y',x.fy+'px');p.node.style.setProperty('--free-w',x.fw+'%');p.node.style.zIndex=String(x.z||1)}p.node.classList.toggle('layout-locked',x.locked);p.grip.draggable=false;p.grip.classList.toggle('layout-locked-grip',x.locked);p.lock.textContent=x.locked?'🔒':'🔓'}
-function scheduleFit(c){if(!c)return;if(layoutFrame)cancelAnimationFrame(layoutFrame);layoutFrame=requestAnimationFrame(()=>{layoutFrame=0;for(let i=c.groups.length-1;i>=0;i--){const g=c.groups[i];if(g.grid.hidden||!g.grid.classList.contains('layout-free'))continue;const layout=c===ctx?draft:c.saved;if(!layout)continue;let h=80;for(const x of layout.items){const p=c.panels.get(x.id);if(p.g!==i||x.hidden)continue;h=Math.max(h,x.fy+p.node.offsetHeight+layout.gap)}g.grid.style.height=Math.ceil(h)+'px'}})}
+// Reflow the home dashboard without mutating the user's saved coordinates.
+function fitHomePanels(c,layout,g,i){
+ const visible=layout.items.filter(x=>!x.hidden&&c.panels.get(x.id)?.g===i);
+ const ordered=visible.slice().sort((a,b)=>a.fy-b.fy||a.fx-b.fx);
+ const placed=[];
+ for(const x of ordered){
+  const p=c.panels.get(x.id);
+  let y=x.fy;
+  if(c!==ctx){
+   for(const prev of placed){
+    const horizontal=x.fx<prev.x.fx+prev.x.fw-0.1&&x.fx+x.fw>prev.x.fx+0.1;
+    if(horizontal)y=Math.max(y,prev.y+prev.height+layout.gap);
+   }
+  }
+  p.node.style.setProperty('--free-y',y+'px');
+  placed.push({x,y,height:p.node.offsetHeight});
+ }
+ return Math.max(80,...placed.map(p=>p.y+p.height+layout.gap));
+}
+function scheduleFit(c){if(!c)return;if(layoutFrame)cancelAnimationFrame(layoutFrame);layoutFrame=requestAnimationFrame(()=>{layoutFrame=0;for(let i=c.groups.length-1;i>=0;i--){const g=c.groups[i];if(g.grid.hidden||!g.grid.classList.contains('layout-free'))continue;const layout=c===ctx?draft:c.saved;if(!layout)continue;let h=80;if(c.id==='home'){h=fitHomePanels(c,layout,g,i)}else for(const x of layout.items){const p=c.panels.get(x.id);if(p.g!==i||x.hidden)continue;h=Math.max(h,x.fy+p.node.offsetHeight+layout.gap)}const height=Math.ceil(h)+'px';if(g.grid.style.height!==height)g.grid.style.height=height}})}
 function apply(c,layout){if(!layout){for(const p of c.panels.values()){if(p.content){p.marker.after(p.content);p.node.remove()}else p.marker.after(p.node);p.node.hidden=false;p.node.classList.remove('layout-selected','layout-locked');for(const k of ['--editor-width','--editor-col','--editor-height','--free-x','--free-y','--free-w','z-index'])p.node.style.removeProperty(k)}for(const g of c.groups){g.grid.hidden=true;g.grid.classList.remove('layout-free');g.grid.style.removeProperty('height');for(const n of g.old)n.classList.remove('layout-original-hidden')}return}
  const needs=layout.items.some(x=>!Number.isFinite(x.fx));for(const g of c.groups){g.grid.hidden=false;g.grid.classList.toggle('layout-free',!needs);g.grid.style.setProperty('--editor-gap',layout.gap+'px');for(const n of g.old)n.classList.add('layout-original-hidden')}
  for(const x of layout.items){const p=c.panels.get(x.id);if(!p)continue;if(p.content&&!p.node.contains(p.content))p.node.insertBefore(p.content,p.node.querySelector('.layout-resize'));c.groups[p.g].grid.append(p.node);p.node.hidden=x.hidden;setStyle(p,x)}
@@ -780,7 +799,7 @@ $e('layoutCancel').onclick=finish;
 $e('layoutReset').onclick=async()=>{if(!ctx)return;const c=ctx;if(!await confirmPrintei('Restaurar a organização original de '+c.label+'?')||ctx!==c)return;try{printeiStorage.removeItem('printei-layout-v2-'+c.id);if(c.id==='home')printeiStorage.removeItem('printei-home-layout-v1');c.saved=null;finish()}catch{message.textContent='Não foi possível restaurar.'}};
 for(const c of contexts.values()){c.section.addEventListener('click',e=>{if(ctx!==c||toolbar.contains(e.target)||e.target.closest('.layout-controls,.layout-resize'))return;if(e.target.closest('.layout-panel')||e.target.closest('button,input,select,a,label,summary')){e.preventDefault();e.stopImmediatePropagation();const n=e.target.closest('.layout-panel');if(n&&e.detail===0)choose(n.dataset.layoutId,e.ctrlKey||e.metaKey)}},true);c.section.addEventListener('submit',e=>{if(ctx===c){e.preventDefault();e.stopImmediatePropagation()}},true);if(c.section.classList.contains('active'))apply(c,c.saved)}
 const observer=new ResizeObserver(entries=>{const c=ctx||active();if(c) scheduleFit(c)});for(const c of contexts.values())for(const p of c.panels.values())observer.observe(p.node);
-const oldTab=tab;tab=function(id){if(ctx&&ctx.id!==id)finish();oldTab(id);const c=contexts.get(id);if(c&&c!==ctx)apply(c,c.saved)};window.addEventListener('resize',()=>scheduleFit(ctx||active()));toggle.hidden=false;toggle.setAttribute('aria-pressed','false');
+const oldTab=tab;tab=function(id){if(ctx&&ctx.id!==id)finish();oldTab(id);const c=contexts.get(id);if(c&&c!==ctx)apply(c,c.saved)};window.addEventListener('resize',()=>scheduleFit(ctx||active()));const homeContext=contexts.get('home');const printerPanel=$e('printerOverview');if(printerPanel&&homeContext){printerPanel.querySelectorAll('details').forEach(d=>d.addEventListener('toggle',()=>scheduleFit(homeContext)));if(typeof ResizeObserver==='function'){const homeObserver=new ResizeObserver(()=>{if(homeContext.section.classList.contains('active'))scheduleFit(homeContext)});for(const p of homeContext.panels.values())homeObserver.observe(p.node);}}toggle.hidden=false;toggle.setAttribute('aria-pressed','false');
 })();</script><script>(function(){
 const f=$('costBuy'),c=f.elements,now=()=>manausToday(),purchases=()=>Array.isArray(data.supplyPurchases)?data.supplyPurchases:[],moves=()=>Array.isArray(data.supplyMoves)?data.supplyMoves:[],cash=()=>Array.isArray(data.cash)?data.cash:[],br=n=>money(n/100),cents=x=>Math.round(Number(x)*100);
 function totals(){return {q:Number(c.qty.value),unit:cents(c.unit.value),transport:c.hasDelivery.value==='yes'?cents(c.transport.value):0}}
