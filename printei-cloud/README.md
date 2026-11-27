@@ -67,3 +67,36 @@ após a remoção.
 - [Mapeamento de relatórios Bambu Cloud, documentação comunitária](https://github.com/Doridian/OpenBambuAPI/blob/main/mqtt.md)
 - [Código do projeto BMCU](https://github.com/karlingen/BMCU)
 - [Exportação de gramatura no Bambu Studio](https://github.com/bambulab/BambuStudio/blob/master/src/libslic3r/Format/bbs_3mf.cpp)
+
+### Implantação isolada após revisão
+
+O `wrangler.jsonc` desta branch aponta para **printei-cloud-experimental**.
+A migração `v1` cria o armazenamento da sessão nesse Worker. O endereço
+esperado na conta com o subdomínio `suikeder` é
+`https://printei-cloud-experimental.suikeder.workers.dev/`.
+
+Com a conta Cloudflare autenticada no plano Workers Free, execute a partir
+da raiz da branch experimental:
+
+```sh
+cd printei-cloud
+npx wrangler@4 deploy --config wrangler.jsonc --dry-run --outdir /tmp/printei-worker
+npx wrangler@4 deploy --config wrangler.jsonc
+npx wrangler@4 secret put PRINTEI_ADMIN_KEY --config wrangler.jsonc
+npx wrangler@4 secret put PRINTEI_SESSION_KEY --config wrangler.jsonc
+```
+
+Gere dois valores independentes com `openssl rand -hex 32` e informe cada
+valor no prompt de seu segredo. Guarde a chave administrativa em um
+gerenciador de senhas para abrir o painel. Confira o endereço que o
+Wrangler imprimir antes de cadastrar os segredos. As rotas protegidas
+exigem a chave administrativa e a gravação da sessão exige os dois segredos.
+
+No endereço experimental, consulte `/health` e confirme
+`stage: mqtt-experimental`. Consulte `/diagnostic` para verificar TLS.
+Depois, abra o painel e entre com o código de e-mail da Bambu para testar
+a Suik Lab. Se a inscrição for aceita e nenhum relatório chegar, repita
+durante uma impressão para testar a escuta passiva.
+
+[Segredos por Worker](https://developers.cloudflare.com/workers/configuration/secrets/)
+e [migrações de Durable Objects](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/).
