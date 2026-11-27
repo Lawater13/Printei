@@ -193,7 +193,7 @@
       const reported = records[unit + ":" + slot + ":color"];
       const material = records[unit + ":" + slot + ":material"];
       const automatic = colorHex(reported?.value);
-      const manual = !automatic || reported.at == null || stale(reported.at) ? preferences.colors?.[slot] : null;
+      const manual = !automatic ? preferences.colors?.[slot] : null;
       const color = manual || automatic;
       if (automatic) receivedColor = true;
       const active = knownActive && traySlot?.unit === unit && traySlot?.slot === slot;
@@ -203,9 +203,10 @@
       if (active || marked) item.dataset.active = "";
       item.append(swatch(color), "Canal " + (slot + 1) + (active ? " · em uso" : marked ? " · uso informado" : indicated ? " · indicação manual" : ""));
       const detail = document.createElement("small");
+      item.title = [color, automatic && stale(reported.at) ? "Última cor recebida" : null, material?.value && stale(material.at) ? "Último material recebido" : null].filter(Boolean).join(" · ");
       detail.textContent = [
-        material?.value ? observed(material.value, material.at) : null,
-        manual ? manual + " · cor manual" : color ? observed(color, reported.at) : "Cor não recebida"
+        material?.value || null,
+        manual ? "Manual" : color ? null : "Cor não recebida"
       ].filter(Boolean).join(" · ");
       item.append(detail);
       channels.append(item);
@@ -226,11 +227,12 @@
     if (!external.hidden) {
       const swatchColor = colorHex(color?.value);
       const summary = [
-        swatchColor ? observed(swatchColor, color.at) : "cor não recebida",
-        material?.value ? observed(material.value, material.at) : null
+        swatchColor ? null : "cor não recebida",
+        material?.value || null
       ].filter(Boolean);
       const name = singleUnit ? "Unidade de bobina única" : "Bobina externa";
-      external.replaceChildren(swatch(swatchColor), name + (spoolActive ? " · em uso" : "") + " · " + summary.join(" · "));
+      external.title = [swatchColor, swatchColor && stale(color.at) ? "Última cor recebida" : null, material?.value && stale(material.at) ? "Último material recebido" : null].filter(Boolean).join(" · ");
+      external.replaceChildren(swatch(swatchColor), name + (spoolActive ? " · em uso" : "") + (summary.length ? " · " + summary.join(" · ") : ""));
     }
   }
 
