@@ -1,0 +1,35 @@
+name: Printei WebView2 experimental
+on:
+  push:
+    branches: [experimental-webview2]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Render official logo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin
+          rsvg-convert -w 256 -h 256 app/logo.svg -o app/logo.png
+      - name: Build Windows executable
+        working-directory: app
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3
+          "$(go env GOPATH)/bin/go-winres" simply --icon logo.png --manifest gui
+          go mod tidy
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-H windowsgui" -o Printei-V8.18-WebView2-TESTE.exe .
+          sha256sum Printei-V8.18-WebView2-TESTE.exe > SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Printei-V8.18-WebView2-TESTE
+          path: |
+            app/Printei-V8.18-WebView2-TESTE.exe
+            app/SHA256.txt
