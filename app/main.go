@@ -30,7 +30,7 @@ import (
 //go:embed index.html logo.svg
 var assets embed.FS
 
-var version = "8.18"
+var version = "8.19"
 const origin = "http://127.0.0.1:43871"
 const addr = "127.0.0.1:43871"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
@@ -220,8 +220,19 @@ func serve(w http.ResponseWriter,r *http.Request){
   reply(w,map[string]any{"ack":ack,"open":opened});scan();return
  case "/update/check","/update/install":
   if !authorized(r,"X-Printei-Update"){http.Error(w,"Acesso negado",403);return}
-   if r.URL.Path=="/update/check"{reply(w,map[string]any{"current":uiVersion(),"available":false});return}
-  fail(w,errors.New("Atualizações desativadas na versão experimental"));return
+  if r.URL.Path=="/update/install"&&!updating.CompareAndSwap(false,true){fail(w,errors.New("Atualização em andamento"));return}
+  m,e:=check()
+  if e==nil&&!newer(m.Version,version){
+   p,ue:=checkUI()
+   if ue!=nil{e=ue}else if newer(p.Version,uiVersion()){
+    if r.URL.Path=="/update/check"{reply(w,map[string]any{"current":uiVersion(),"version":p.Version,"available":true,"light":true});return}
+    e=installUI(p);updating.Store(false);if e!=nil{fail(w,e);return};reply(w,map[string]bool{"ok":true,"light":true});return
+   }
+  }
+  if r.URL.Path=="/update/check"{if e!=nil{fail(w,e);return};reply(w,map[string]any{"current":uiVersion(),"version":m.Version,"available":newer(m.Version,version)});return}
+  if e==nil{e=install(m)}
+  if e!=nil{updating.Store(false);fail(w,e);return}
+  reply(w,map[string]bool{"ok":true});if f,ok:=w.(http.Flusher);ok{f.Flush()};go func(){time.Sleep(2*time.Second);os.Exit(0)}();return
  case "/","/index.html":
   pageLifecycle.Lock();pageGeneration++;activePage="";pageLifecycle.Unlock()
   b,_:=assets.ReadFile("index.html");uiMu.RLock();if uiCurrent.HTML!=""{b=[]byte(uiCurrent.HTML)};uiMu.RUnlock();html:=strings.ReplaceAll(string(b),"Printei v6.2 Portable","Printei v"+uiVersion()+" Portable");html=strings.Replace(html,"</html>",buttonScript+"</html>",1);w.Header().Set("Content-Type","text/html; charset=utf-8");_,_=io.WriteString(w,html);return
@@ -252,10 +263,10 @@ func main(){
  runtime.LockOSThread()
  defer runtime.UnlockOSThread()
  shell32:=syscall.NewLazyDLL("shell32.dll")
- appID,_:=syscall.UTF16PtrFromString("Printei.WebView2.Experimental")
+ appID,_:=syscall.UTF16PtrFromString("Printei.WebView2")
  shell32.NewProc("SetCurrentProcessExplicitAppUserModelID").Call(uintptr(unsafe.Pointer(appID)))
  w:=webview2.NewWithOptions(webview2.WebViewOptions{AutoFocus:true,DataPath:profile,WindowOptions:webview2.WindowOptions{Title:"Printei",Width:1280,Height:800,Center:true,IconId:1}})
- if w==nil{notice("WebView2 indisponível. Use a versão de backup.",16);return}
+ if w==nil{notice("WebView2 indisponível. Instale o runtime Microsoft Edge WebView2 ou use a versão de backup.",16);return}
  defer w.Destroy()
  user32.NewProc("ShowWindow").Call(uintptr(w.Window()),3)
  w.Navigate(origin+"/")
