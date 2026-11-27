@@ -1,3 +1,5 @@
+import { normalizeReport } from "./monitor.js";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const maxPacket = 256 * 1024;
@@ -57,54 +59,6 @@ function parseReport(body, topic) {
   }
 }
 
-const metricFields = {
-  gcode_state: "state", subtask_name: "job", gcode_file: "file",
-  mc_percent: "progress", mc_remaining_time: "remainingMinutes",
-  nozzle_temper: "nozzleC", bed_temper: "bedC", chamber_temper: "chamberC"
-};
-
-function mergeReport(telemetry, report) {
-  if (!report || typeof report !== "object") return false;
-  let changed = false;
-  for (const [input, output] of Object.entries(metricFields)) {
-    const value = report[input];
-    if (["state", "job", "file"].includes(output)) {
-      if (typeof value !== "string") continue;
-      telemetry[output] = value.slice(0, 250);
-    } else {
-      if (!Number.isFinite(value) || value < 0 || (output === "progress" && value > 100)) continue;
-      telemetry[output] = value;
-    }
-    changed = true;
-  }
-  if (Array.isArray(report.ams?.ams)) {
-    telemetry.units ??= {};
-    if (report.ams.ams.length === 0) telemetry.units = {};
-    for (const unit of report.ams.ams) {
-      const id = String(unit?.id ?? "");
-      if (!/^\d{1,2}$/.test(id) || !Array.isArray(unit.tray)) continue;
-      const slots = telemetry.units[id] ||= {};
-      if (unit.tray.length === 0) telemetry.units[id] = {};
-      for (const tray of unit.tray) {
-        const slot = String(tray?.id ?? "");
-        if (!/^[0-3]$/.test(slot)) continue;
-        if (Object.keys(tray).length === 1) {
-          slots[slot] = { material: null, color: null };
-          continue;
-        }
-        const channel = slots[slot] ||= { material: null, color: null };
-        if (typeof tray.tray_type === "string") channel.material = tray.tray_type.slice(0, 40) || null;
-        if (typeof tray.tray_color === "string") {
-          channel.color = /^[0-9a-f]{8}$/i.test(tray.tray_color) && tray.tray_color !== "00000000"
-            ? "#" + tray.tray_color.slice(0, 6).toUpperCase() : null;
-        }
-      }
-    }
-    changed = true;
-  }
-  return changed;
-}
-
 export async function readTelemetry(connect, session, serial, windowMs = 8000) {
   const topic = "device/" + serial + "/report";
   const clientId = "printei" + crypto.randomUUID().replaceAll("-", "").slice(0, 16);
@@ -114,9 +68,8 @@ export async function readTelemetry(connect, session, serial, windowMs = 8000) {
   let socket, timer;
   let phase = "tls";
   let failure;
-  let receivedAt = null;
+  const samples = [];
   let expired = false;
-  const telemetry = {};
   try {
     socket = connect({ hostname: "us.mqtt.bambulab.com", port: 8883 }, { secureTransport: "on" });
     socket.closed.catch(() => {});
@@ -160,7 +113,11 @@ export async function readTelemetry(connect, session, serial, windowMs = 8000) {
             }
             phase = "listening";
           } else if ((phase === "listening" || phase === "subscribe") && (type & 0xf6) === 0x30) {
-            if (mergeReport(telemetry, parseReport(body, topic))) receivedAt = new Date().toISOString();
+            const sample = normalizeReport(parseReport(body, topic), Date.now(), Boolean(type & 1));
+            if (sample && samples.length < 32) {
+              samples.push(sample);
+              if (samples.length >= 32 && phase === "listening") return;
+            }
           }
         }
       }
@@ -168,7 +125,7 @@ export async function readTelemetry(connect, session, serial, windowMs = 8000) {
     await Promise.race([listen(), timeout]);
     if (failure) return failure;
     if (phase === "listening") {
-      if (receivedAt) return { status: "received", receivedAt, telemetry };
+      if (samples.length) return { status: "received", samples };
       return { status: expired ? "no_report" : "disconnected", stage: phase };
     }
     return { status: expired ? "timeout" : "disconnected", stage: phase };

@@ -41,7 +41,10 @@ export const panel = String.raw`<!doctype html>
     <dl id="metrics"></dl>
     <h3>Canais de filamento</h3>
     <ul id="channels"></ul>
-    <p>Consumo em gramas por cor ainda sem confirmação.</p>
+    <h3>Consumo por cor</h3>
+    <dl><dt>Estimado</dt><dd><span id="estimated">Indisponível</span></dd><dt>Real</dt><dd>Indisponível nos relatórios MQTT</dd></dl>
+    <h3>Histórico de impressões</h3>
+    <ul id="history"></ul>
   </section>
 </main>
 <script>
@@ -49,6 +52,7 @@ export const panel = String.raw`<!doctype html>
   const key = byId("key"), email = byId("email"), code = byId("code"), device = byId("device");
   const monitor = byId("monitor"), status = byId("status");
   let busy = false;
+  let lastView = {};
   const states = {
     no_report: "Inscrição aceita. Nenhum relatório de impressão chegou nesta consulta.",
     auth_refused: "O broker recusou a sessão. Entre novamente para renovar a sessão.",
@@ -112,48 +116,120 @@ export const panel = String.raw`<!doctype html>
     monitor.hidden = devices.length === 0;
     render({});
   }
+  const printStates = {
+    IDLE: "Em repouso", RUNNING: "Imprimindo", PAUSE: "Pausada", PREPARE: "Preparando",
+    SLICING: "Preparando", INIT: "Preparando", FINISH: "Concluída", FAILED: "Erro",
+    CANCELLED: "Interrompida", CANCELED: "Interrompida"
+  };
+  const speedModes = { 1: "Silencioso", 2: "Padrão", 3: "Esportivo", 4: "Máximo" };
+  const formatTime = timestamp => new Date(timestamp).toLocaleString("pt-BR");
+  const duration = minutes => {
+    const rounded = Math.max(0, Math.floor(minutes));
+    return rounded < 60 ? rounded + " min" : Math.floor(rounded / 60) + " h " + rounded % 60 + " min";
+  };
+  const fan = value => value == null ? null : value === 0 ? "Desligado" : "Ligado · nível " + value + "/15";
+  const fmt = (value, unit) => value == null ? null : value + unit;
+
   function render(result) {
-    const data = result.telemetry || {};
-    byId("sample").textContent = result.receivedAt
-      ? "Recebido às " + new Date(result.receivedAt).toLocaleTimeString("pt-BR") : "";
+    lastView = result;
+    const now = Date.now(), staleAfter = result.staleAfterMs || 120000;
+    const data = result.telemetry || {}, updated = result.updated || {};
+    const stale = at => at == null || now - at > staleAfter;
+    const suffix = (at, value) => value == null ? "" : at == null ? " · horário de origem desconhecido"
+      : stale(at) ? " · desatualizado" : "";
+    const age = (...keys) => keys.some(key => updated[key] == null) ? null
+      : Math.min(...keys.map(key => updated[key]));
+    byId("sample").textContent = result.lastReportAt
+      ? "Última comunicação MQTT: " + formatTime(result.lastReportAt) + suffix(result.lastReportAt, true)
+      : "Última comunicação MQTT indisponível.";
     const metrics = byId("metrics");
     metrics.replaceChildren();
-    const job = ["IDLE", "FINISH", "FAILED"].includes(data.state) ? null : data.job || data.file;
-    for (const [label, value, unit] of [
-      ["Impressão", job, ""], ["Estado", data.state, ""], ["Progresso", data.progress, " %"],
-      ["Tempo restante", data.remainingMinutes, " min"], ["Bico", data.nozzleC, " °C"],
-      ["Mesa", data.bedC, " °C"], ["Câmara", data.chamberC, " °C"]
+    const printing = ["RUNNING", "PAUSE", "PREPARE", "INIT", "SLICING"].includes(data.state);
+    const channelRecords = result.channels || {};
+    const activeTray = data.activeTray == null ? null : data.activeTray === 254 ? "Bobina externa"
+      : data.activeTray === 255 ? "Nenhum indicado" : "Unidade " + Math.floor(data.activeTray / 4) +
+      " · Canal " + (data.activeTray % 4 + 1);
+    const basic = (label, key, unit = "") => [label, fmt(data[key], unit), updated[key]];
+    for (const [label, value, at] of [
+      ["Conexão", !stale(result.connectionAt) && result.connection ? (result.connection === "online" ? "Online" : "Offline") : null, result.connectionAt],
+      ["Estado da impressão", printStates[data.state] || data.state, updated.state],
+      ["Peça", printing ? data.job || data.file : null, data.job ? updated.job : updated.file],
+      basic("Progresso", "progress", " %"),
+      ["Tempo decorrido desde o início", printing && data.startedAt && !stale(updated.state)
+        ? duration((now - data.startedAt) / 60000) : null, updated.startedAt],
+      ["Tempo restante informado", data.remainingMinutes == null ? null : duration(data.remainingMinutes), updated.remainingMinutes],
+      ["Previsão de término", result.eta && !stale(age("state", "remainingMinutes")) ? formatTime(result.eta) : null, age("state", "remainingMinutes")],
+      basic("Camada atual", "layer"), basic("Total de camadas", "totalLayers"),
+      basic("Bico", "nozzleC", " °C"), basic("Alvo do bico", "nozzleTargetC", " °C"),
+      basic("Mesa", "bedC", " °C"), basic("Alvo da mesa", "bedTargetC", " °C"),
+      basic("Câmara", "chamberC", " °C"),
+      ["Modo de velocidade", speedModes[data.speedLevel] || fmt(data.speedLevel, ""), updated.speedLevel],
+      basic("Velocidade relativa", "speedPercent", " %"),
+      ...[["Peça", "partFan"], ["Hotend", "hotendFan"], ["Auxiliar", "auxFan"], ["Câmara", "chamberFan"]]
+        .map(([label, key]) => ["Ventilador · " + label, fan(data[key]), updated[key]]),
+      ["Erro de impressão", data.printError == null ? null : data.printError === 0 ? "Nenhum informado"
+        : "0x" + data.printError.toString(16).toUpperCase(), updated.printError],
+      ["Alertas HMS", data.alerts?.length ? data.alerts.join(", ") : data.alerts ? "Nenhum informado" : null, updated.alerts],
+      ["Filamento ativo", activeTray, updated.activeTray]
     ]) {
       const term = document.createElement("dt"), description = document.createElement("dd");
       term.textContent = label;
-      description.textContent = value == null ? "—" : value + unit;
+      description.textContent = value == null ? "—" : value + suffix(at, value);
       metrics.append(term, description);
     }
+
     const channels = byId("channels");
     channels.replaceChildren();
-    for (const [id, slots] of Object.entries(data.units || {})) {
-      for (const [slot, filament] of Object.entries(slots)) {
+    const units = [...new Set(Object.keys(channelRecords).map(key => key.split(":")[0]))];
+    if (!units.some(id => id !== "external")) units.unshift(null);
+    for (const id of units) {
+      const count = id === "external" ? 1 : 4;
+      for (let slot = 0; slot < count; slot++) {
         const item = document.createElement("li");
-        item.append("Unidade " + id + " · Canal " + (Number(slot) + 1) + " — ");
-        if (filament.color) {
+        const color = channelRecords[id + ":" + slot + ":color"];
+        const material = channelRecords[id + ":" + slot + ":material"];
+        const selected = id != null && (id === "external" ? data.activeTray === 254
+          : data.activeTray < 254 && data.activeTray === Number(id) * 4 + slot);
+        const name = id === "external" ? "Bobina externa" : (id == null ? "" : "Unidade " + id + " · ") + "Canal " + (slot + 1);
+        item.append(name + (selected ? " · ativo" + suffix(updated.activeTray, true) : "") + " — ");
+        if (color?.value) {
           const swatch = document.createElement("span");
           swatch.className = "swatch";
-          swatch.style.backgroundColor = filament.color;
-          item.append(swatch, filament.color + " · ");
+          swatch.style.backgroundColor = color.value;
+          item.append(swatch, color.value + suffix(color.at, color.value) + " · ");
+        } else {
+          item.append("Cor indisponível · ");
         }
-        item.append(filament.material || "Material não informado");
+        item.append(material?.value ? material.value + suffix(material.at, material.value) : "Material indisponível");
         channels.append(item);
       }
     }
-    if (!channels.children.length) {
+
+    const estimates = entries => Object.entries(entries || {}).map(([color, grams]) =>
+      color + " · " + grams.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + " g").join(", ");
+    const currentEstimate = estimates(result.estimated);
+    byId("estimated").textContent = currentEstimate
+      ? currentEstimate + suffix(result.cloudUpdatedAt, true) : "Indisponível para esta impressão";
+    const history = byId("history");
+    history.replaceChildren();
+    for (const entry of result.history || []) {
       const item = document.createElement("li");
-      item.textContent = "Nenhum canal informado nesta consulta.";
-      channels.append(item);
+      item.textContent = (entry.job || "Peça sem nome informado") + " · " +
+        (entry.result === "completed" ? "Concluída" : "Interrompida") +
+        (entry.endedAt ? " · " + formatTime(entry.endedAt) + " · Bambu Cloud"
+          : " · observada em " + formatTime(entry.observedAt));
+      const estimate = estimates(entry.estimated);
+      if (estimate) item.append(" · estimativa " + estimate);
+      history.append(item);
+    }
+    if (!history.children.length) {
+      const item = document.createElement("li");
+      item.textContent = "Nenhum encerramento observado.";
+      history.append(item);
     }
   }
   function refresh() {
     return run(async () => {
-      render({});
       const result = await call("telemetry", { device: Number(device.value) });
       render(result);
       if (result.status === "auth_refused") byId("auto").checked = false;
@@ -193,7 +269,8 @@ export const panel = String.raw`<!doctype html>
     key.value = "";
   });
   byId("refresh").onclick = refresh;
-  device.onchange = refresh;
+  device.onchange = () => { render({}); refresh(); };
+  setInterval(() => { if (!document.hidden && !monitor.hidden && !busy) render(lastView); }, 15000);
   setInterval(() => {
     if (!document.hidden && !monitor.hidden && byId("auto").checked) refresh();
   }, 30000);

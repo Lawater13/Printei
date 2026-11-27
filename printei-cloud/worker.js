@@ -1,6 +1,7 @@
 import { connect } from "cloudflare:sockets";
 import { readTelemetry } from "./mqtt.js";
 import { tokenClaims } from "./session.js";
+import { monitorView, normalizeTasks, staleAfterMs } from "./monitor.js";
 import { panel } from "./panel.js";
 
 export { BambuSession } from "./session.js";
@@ -29,7 +30,7 @@ class BambuError extends Error {
 async function bambu(stage, path, options = {}) {
   let response;
   try {
-    response = await fetch(api + path, { ...options, redirect: "manual", signal: AbortSignal.timeout(20000) });
+    response = await fetch(api + path, { ...options, redirect: "manual", signal: options.signal ?? AbortSignal.timeout(20000) });
     const upstreamStatus = response.status;
     const details = { upstreamStatus };
     if (!response.ok) {
@@ -161,12 +162,52 @@ async function privateRoute(request, env, path, url) {
   }
   const device = Number.isInteger(body.device) ? session.devices[body.device] : null;
   if (!device) return error("Selecione uma impressora vinculada.", 400);
-  const result = await readTelemetry(connect, session, device.serial);
+  let previous;
+  try {
+    previous = await store.monitor(session.username, device.serial);
+  } catch {
+    console.warn({ event: "bambu_monitor_storage_failed" });
+    return json({ error: "Falha ao acessar o histórico da impressora.", stage: "monitoramento", category: "storage" }, 502);
+  }
+  const at = Date.now();
+  const authOptions = { headers: { Authorization: "Bearer " + session.token } };
+  const mqtt = readTelemetry(connect, session, device.serial);
+  const cloud = at - (previous?.cloudAttemptAt ?? 0) >= staleAfterMs
+    ? bambu("historico", "/v1/user-service/my/tasks?limit=30&deviceId=" + encodeURIComponent(device.serial),
+        { ...authOptions, signal: AbortSignal.timeout(3000) })
+      .then(raw => ({ at, tasks: normalizeTasks(raw, device.serial) }), () => ({ at, tasks: null }))
+    : null;
+  const [{ samples = [], ...result }, taskUpdate] = await Promise.all([mqtt, cloud]);
   if (result.status !== "received") {
     console.warn({ event: "bambu_telemetry", status: result.status, stage: result.stage,
       brokerCode: result.brokerCode });
   }
-  return json(result);
+  try {
+    let availability = null;
+    if (!samples.some(sample => !sample.retained)) {
+      const lastCheck = Math.max(previous?.lastReportAt ?? 0, previous?.availability?.at ?? 0);
+      if (Date.now() - lastCheck > staleAfterMs) {
+        const at = Date.now();
+        try {
+          const devices = await bambu("impressoras", "/v1/iot-service/api/user/bind", {
+            ...authOptions,
+            signal: AbortSignal.timeout(3000)
+          });
+          const online = Array.isArray(devices.devices)
+            ? devices.devices.find(item => item?.dev_id === device.serial)?.online : undefined;
+          availability = { at, online: typeof online === "boolean" ? online : null };
+        } catch {
+          availability = { at, online: null };
+        }
+      }
+    }
+    const snapshot = samples.length || availability || taskUpdate
+      ? await store.monitor(session.username, device.serial, samples, availability, taskUpdate) : previous;
+    return json({ ...result, ...monitorView(snapshot) });
+  } catch {
+    console.warn({ event: "bambu_monitor_storage_failed" });
+    return json({ error: "Falha ao acessar o histórico da impressora.", stage: "monitoramento", category: "storage" }, 502);
+  }
 }
 
 export default {

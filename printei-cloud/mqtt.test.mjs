@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readTelemetry } from "./mqtt.js";
+import { monitorView, updateMonitor } from "./monitor.js";
 
 const serial = "TEST123";
 const topic = "device/" + serial + "/report";
@@ -68,13 +69,15 @@ test("assina somente report e combina pacotes fragmentados sem publicar comandos
   ], [...state.slice(2), ...ams]]);
   const result = await readTelemetry(mock.connect, session, serial);
   assert.equal(result.status, "received");
-  assert.ok(Number.isFinite(Date.parse(result.receivedAt)));
-  assert.deepEqual(result.telemetry, {
-    state: "RUNNING", job: "Peça", progress: 0, remainingMinutes: 12, nozzleC: 220, bedC: 60,
-    units: { 0: {
-      0: { material: "PLA", color: "#123456" }, 1: { material: "PETG", color: "#FFFFFF" },
-      2: { material: null, color: null }, 3: { material: null, color: null }
-    } }
+  assert.equal(result.samples.length, 2);
+  const view = monitorView(updateMonitor(null, result.samples));
+  assert.ok(Number.isFinite(view.lastReportAt));
+  assert.deepEqual(view.telemetry, {
+    state: "RUNNING", job: "Peça", progress: 0, remainingMinutes: 12, nozzleC: 220, bedC: 60
+  });
+  assert.deepEqual(Object.fromEntries(Object.entries(view.channels).map(([key, entry]) => [key, entry.value])), {
+    "0:0:material": "PLA", "0:0:color": "#123456", "0:1:material": "PETG", "0:1:color": "#FFFFFF",
+    "0:2:material": null, "0:2:color": null, "0:3:material": null, "0:3:color": null
   });
   assert.deepEqual(mock.address(), {
     destination: { hostname: "us.mqtt.bambulab.com", port: 8883 }, options: { secureTransport: "on" }

@@ -3,12 +3,12 @@
 O painel usa a conta Bambu já vinculada à impressora. Uma consulta abre TLS em
 `us.mqtt.bambulab.com:8883`, autentica com MQTT 3.1.1 e assina apenas
 `device/<serial>/report`, em QoS 0. A escuta dura até oito segundos, incluindo
-a conexão, e combina relatórios parciais dentro da janela. A atualização
+a conexão, e reúne até 32 relatórios parciais por consulta. A atualização
 automática é opcional e consulta a cada 30 segundos com o painel visível.
 
 O cliente envia apenas MQTT CONNECT e SUBSCRIBE. O broker pode aceitar a
 inscrição sem enviar um relatório nessa janela, especialmente em repouso.
-O painel informa essa condição e exibe apenas dados recebidos na consulta.
+O painel informa essa condição e conserva as últimas amostras já recebidas.
 O endpoint protegido `POST /bambu/telemetry` devolve os campos normalizados
 para uma futura integração à Visão geral do Printei.
 
@@ -46,8 +46,7 @@ O esquema MQTT observado expõe metadados de bandeja e progresso. Ainda
 falta confirmação de gramas efetivamente consumidos por cor. O Bambu Studio
 grava `used_g` por filamento no `Metadata/slice_info.config` de um arquivo
 fatiado. Esse valor é uma estimativa do fatiamento, e sua correspondência com
-os canais físicos depende do mapeamento do trabalho. O painel não importa
-valores do fatiador nem modifica o estoque.
+os canais físicos depende do mapeamento do trabalho. O painel exibe a estimativa da Bambu Cloud quando disponível e não modifica o estoque.
 
 ## Revisão e validação
 
@@ -100,3 +99,35 @@ durante uma impressão para testar a escuta passiva.
 
 [Segredos por Worker](https://developers.cloudflare.com/workers/configuration/secrets/)
 e [migrações de Durable Objects](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/).
+
+### Dados do monitor
+
+O Durable Object acumula os relatórios por conta Bambu e impressora. Cada
+medida, cor e material mantém seu próprio horário de recebimento. O painel
+marca dados com mais de dois minutos como desatualizados. Mensagens MQTT
+retidas podem preencher a primeira leitura, sem indicar conexão recente.
+Na ausência de amostra ao vivo, a consulta de impressoras vinculadas pode
+informar online ou offline. Silêncio no MQTT deixa a conexão indeterminada.
+
+O tempo decorrido parte de `gcode_start_time` quando informado e inclui
+pausas. A previsão usa o horário da amostra e o tempo restante enquanto a
+impressora reporta estado de impressão. Velocidade é o percentual relativo
+informado pelo firmware. Ventiladores são exibidos pelo nível reportado.
+
+Durante as consultas, o Worker tenta ler `GET /v1/user-service/my/tasks`
+no máximo uma vez a cada dois minutos por impressora em uso normal.
+O histórico mostra até 30 encerramentos recentes obtidos pela API ou
+observados pelo MQTT. A disponibilidade de tarefas depende da conta e
+da API, e o MQTT passivo só registra transições recebidas enquanto uma
+consulta está aberta. A leitura dos trabalhos pode disponibilizar
+estimativas por cor via `amsDetailMapping.weight`, inclusive para um
+trabalho interrompido. Esses valores representam o fatiamento e o painel
+não os usa como consumo medido ou para descontar estoque.
+
+A documentação comunitária descreve `pushing.pushall` como pedido de
+status completo. Ele exige publicar em `device/<serial>/request` e a
+permissão para esse tópico não foi confirmada. O monitor usa somente
+CONNECT e SUBSCRIBE no MQTT, sem solicitar esse relatório.
+
+- [Histórico e estimativas de filamento da Bambu Cloud](https://github.com/Doridian/OpenBambuAPI/blob/main/cloud-http.md#get-v1user-servicemytasks)
+- [Pedido MQTT de status completo](https://github.com/Doridian/OpenBambuAPI/blob/main/mqtt.md#pushingpushall)

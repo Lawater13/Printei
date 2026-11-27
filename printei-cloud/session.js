@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { updateMonitor } from "./monitor.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -42,6 +43,16 @@ export class BambuSession extends DurableObject {
     const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: record.iv }, key, record.ciphertext);
     const session = JSON.parse(decoder.decode(bytes));
     return session.expiresAt > Date.now() ? session : null;
+  }
+
+  async monitor(account, serial, samples = [], availability = null, cloud = null) {
+    const key = "monitor:" + account + ":" + serial;
+    if (!samples.length && !availability && !cloud) return (await this.ctx.storage.get(key)) ?? null;
+    return this.ctx.storage.transaction(async storage => {
+      const snapshot = updateMonitor(await storage.get(key), samples, availability, cloud);
+      await storage.put(key, snapshot);
+      return snapshot;
+    });
   }
 
   async clear() {
