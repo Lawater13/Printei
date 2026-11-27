@@ -15,7 +15,7 @@ func TestHash(t *testing.T){
 
 func TestUI(t *testing.T){
  html:="<!doctype html><html>teste</html>";h:=sha256.Sum256([]byte(html))
- p:=uiPackage{Version:"7.3",Core:version,Commit:strings.Repeat("a",40),SHA:hex.EncodeToString(h[:]),HTML:html}
+ p:=uiPackage{Version:"8.23",Core:version,Commit:strings.Repeat("a",40),SHA:hex.EncodeToString(h[:]),HTML:html}
  if !uiVerify(p){t.Fatal("valid interface rejected")}
  p.HTML+="changed";if uiVerify(p){t.Fatal("invalid interface accepted")}
  p.HTML=html;p.Core="6.0";if uiVerify(p){t.Fatal("incompatible core accepted")}
