@@ -3,5 +3,9 @@
   "main": "worker.js",
   "compatibility_date": "2026-01-01",
   "workers_dev": true,
-  "preview_urls": false
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "BAMBU_SESSION", "class_name": "BambuSession" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BambuSession"] }]
 }
