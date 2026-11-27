@@ -8,7 +8,7 @@ export default { async fetch(request, env) {
  const body=await request.json().catch(()=>null);
  if(!body || typeof body.key!=="string" || body.key!==env.PRINTEI_ADMIN_KEY) return Response.json({error:"Chave de acesso inválida"},{status:403,headers});
  const email=String(body.email||"").trim(),code=String(body.code||"").trim();
- if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)||email.length>254|| (code&&!/^\\d{6}$/.test(code)))return Response.json({error:"Confira o e-mail e o código de seis dígitos."},{status:400,headers});
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254|| (code&&!/^\d{6}$/.test(code)))return Response.json({error:"Confira o e-mail e o código de seis dígitos."},{status:400,headers});
  try{
  const endpoint=code?"login":"sendemail/code";
  const upstream=await fetch("https://api.bambulab.com/v1/user-service/user/"+endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(code?{account:email,code}:{email,type:"codeLogin"}),redirect:"error",signal:AbortSignal.timeout(10000)});
