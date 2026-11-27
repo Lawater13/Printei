@@ -16,6 +16,8 @@ import (
  "os/exec"
  "path/filepath"
  "regexp"
+ "runtime"
+ webview2 "github.com/jchv/go-webview2"
  "strconv"
  "strings"
  "sync"
@@ -28,7 +30,7 @@ import (
 //go:embed index.html logo.svg
 var assets embed.FS
 
-var version = "7.0"
+var version = "8.18"
 const origin = "http://127.0.0.1:43871"
 const addr = "127.0.0.1:43871"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
@@ -249,18 +251,24 @@ func main(){
  if len(os.Args)==6&&os.Args[1]=="--apply-update"{if e:=applyUpdate(os.Args[2],os.Args[3],os.Args[4],os.Args[5]);e!=nil{notice("Atualização não instalada: "+e.Error(),16)};return}
  if len(os.Args)==2&&os.Args[1]=="--version"{fmt.Println(version);return}
  root:=os.Getenv("LOCALAPPDATA");if root==""{notice("LOCALAPPDATA indisponível.",16);return}
- uiDir=filepath.Join(root,"Printei","Interface");loadUI()
- profile:=filepath.Join(root,"Printei","Perfil")
+ uiDir=filepath.Join(root,"Printei-WebView2-Test","Interface");loadUI()
+ profile:=filepath.Join(root,"Printei-WebView2-Test","Perfil")
  if e:=os.MkdirAll(profile,0700);e!=nil{notice(e.Error(),16);return}
- edge:=edgePath();if edge==""{notice("Microsoft Edge não encontrado.",16);return}
  l,e:=net.Listen("tcp",addr);if e!=nil{notice("Feche a outra versão do Printei antes de abrir esta.",48);return}
  alarms.ack=make(map[string]bool)
  lastSeen.Store(time.Now().Unix())
  srv:=&http.Server{Handler:http.HandlerFunc(serve),ReadHeaderTimeout:5*time.Second}
  go srv.Serve(l)
  go func(){for range time.NewTicker(time.Second).C{scan()}}()
- cmd:=exec.Command(edge,"--user-data-dir="+profile,"--app="+origin+"/","--no-first-run","--start-maximized","--disable-background-mode")
- start:=time.Now();if e=cmd.Start();e!=nil{notice(e.Error(),16);return}
- go func(){_ = cmd.Wait();if time.Since(start)>5*time.Second&&!updating.Load(){os.Exit(0)}}()
- for range time.NewTicker(15*time.Second).C{if !updating.Load()&&time.Now().Unix()-lastSeen.Load()>300{return}}
+ runtime.LockOSThread()
+ defer runtime.UnlockOSThread()
+ shell32:=syscall.NewLazyDLL("shell32.dll")
+ appID,_:=syscall.UTF16PtrFromString("Printei.WebView2.Experimental")
+ shell32.NewProc("SetCurrentProcessExplicitAppUserModelID").Call(uintptr(unsafe.Pointer(appID)))
+ w:=webview2.NewWithOptions(webview2.WebViewOptions{AutoFocus:true,DataPath:profile,WindowOptions:webview2.WindowOptions{Title:"Printei",Width:1280,Height:800,Center:true,IconId:1}})
+ if w==nil{notice("WebView2 indisponível. Use a versão de backup.",16);return}
+ defer w.Destroy()
+ user32.NewProc("ShowWindow").Call(uintptr(w.Window()),3)
+ w.Navigate(origin+"/")
+ w.Run()
 }
