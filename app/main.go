@@ -30,7 +30,7 @@ import (
 //go:embed index.html logo.svg printer-cloud.js
 var assets embed.FS
 
-var version = "8.66"
+var version = "8.67"
 const origin = "http://127.0.0.1:43872"
 const addr = "127.0.0.1:43872"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
