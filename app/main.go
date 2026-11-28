@@ -30,7 +30,7 @@ import (
 //go:embed index.html logo.svg printer-cloud.js
 var assets embed.FS
 
-var version = "8.65"
+var version = "8.66"
 const origin = "http://127.0.0.1:43872"
 const addr = "127.0.0.1:43872"
 const feed = "https://raw.githubusercontent.com/Lawater13/Printei/main/update.json"
@@ -226,6 +226,15 @@ func projectBridge(w http.ResponseWriter,r *http.Request){
   n,e:=io.Copy(f,http.MaxBytesReader(w,r.Body,512<<20));ce:=f.Close();if e!=nil||ce!=nil||n==0{os.RemoveAll(dir);fail(w,errors.New("Arquivo vazio, inválido ou maior que 512 MB"));return}
   cmd:=exec.Command(studio,path);if e=cmd.Start();e!=nil{os.RemoveAll(dir);fail(w,e);return};go cmd.Wait()
   token:=filepath.Base(dir);projectSessions.Lock();projectSessions.paths[token]=dir;projectSessions.Unlock()
+  reply(w,map[string]string{"token":token,"path":path,"savePath":filepath.Join(dir,"projeto.3mf")})
+ case "/project/reopen":
+  token:=r.URL.Query().Get("token");projectSessions.Lock();dir:=projectSessions.paths[token];projectSessions.Unlock()
+  if dir==""{w.WriteHeader(http.StatusGone);return}
+  studio:=bambuStudioPath();if studio==""{fail(w,errors.New("Bambu Studio não localizado"));return}
+  var path string
+  for _,ext:=range []string{".3mf",".stl",".obj",".gcode"}{p:=filepath.Join(dir,"projeto"+ext);if st,e:=os.Stat(p);e==nil&&st.Mode().IsRegular(){path=p;break}}
+  if path==""{fail(w,errors.New("Arquivo da sessão não encontrado"));return}
+  cmd:=exec.Command(studio,path);if e:=cmd.Start();e!=nil{fail(w,e);return};go cmd.Wait()
   reply(w,map[string]string{"token":token,"path":path,"savePath":filepath.Join(dir,"projeto.3mf")})
  case "/project/read":
   token:=r.URL.Query().Get("token");projectSessions.Lock();dir:=projectSessions.paths[token];projectSessions.Unlock()
