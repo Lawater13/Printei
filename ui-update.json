@@ -1,6 +1,6 @@
 {
-  "version": "8.21",
-  "core": "8.20",
-  "commit": "f0d2eb375bf5a78cda90312d133680bac2191161",
-  "sha256": "4b1f11a5614d7403ed029450790da1c5bd54d4077ff8e75cb50e6230644fd0fa"
+  "version": "8.71",
+  "core": "8.70",
+  "commit": "e2b8a4ffec743f6a5b438a51c4916b48e6a7bb92",
+  "sha256": "9429fef485a831641b565dace6a605bb9df508fc36013bf07a3a687e9a7b883d"
 }
