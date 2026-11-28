@@ -1,4 +1,4 @@
-name: Printei Hub oficial V8.65
+name: Printei Hub oficial V8.66
 on:
   push:
     branches: [main]
@@ -40,7 +40,7 @@ jobs:
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/printei.test.exe"
       - name: Definir versão da compilação
         shell: bash
-        run: echo "BUILD_VERSION=8.65" >> "$GITHUB_ENV"
+        run: echo "BUILD_VERSION=8.66" >> "$GITHUB_ENV"
       - name: Compilar EXE portátil
         working-directory: app
         run: |
@@ -62,13 +62,13 @@ jobs:
           path.write_text(source.replace(original, "w32.User32ShowWindow.Call(w.hwnd, 3)"))
           PY
           go mod edit -replace=github.com/jchv/go-webview2="$RUNNER_TEMP/printei-webview2"
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-H windowsgui -X main.version=$BUILD_VERSION" -o Printei-V8.65-Portable.exe .
-          sha256sum Printei-V8.65-Portable.exe > SHA256.txt
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-H windowsgui -X main.version=$BUILD_VERSION" -o Printei-V8.66-Portable.exe .
+          sha256sum Printei-V8.66-Portable.exe > SHA256.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Printei-V8.65-Portable
+          name: Printei-V8.66-Portable
           path: |
-            app/Printei-V8.65-Portable.exe
+            app/Printei-V8.66-Portable.exe
             app/SHA256.txt
 
       - name: Publicar atualização oficial
@@ -80,10 +80,10 @@ jobs:
           set -euo pipefail
           tag="v$BUILD_VERSION"
           asset="Printei-V$BUILD_VERSION-Portable.exe"
-          cp app/Printei-V8.65-Portable.exe "$asset"
+          cp app/Printei-V8.66-Portable.exe "$asset"
           sha=$(sha256sum "$asset" | cut -d' ' -f1)
           if gh release view "$tag" >/dev/null 2>&1; then echo "Versão já publicada; aumente a versão para nova release."; exit 0; fi
-          gh release create "$tag" "$asset" --target "$GITHUB_SHA" --latest --title "Printei Hub V$BUILD_VERSION" --notes "Capas de projetos com Ctrl+V, prévia e compressão."
+          gh release create "$tag" "$asset" --target "$GITHUB_SHA" --latest --title "Printei Hub V$BUILD_VERSION" --notes "Reabertura de projetos no Bambu Studio sem bloquear a sessão de edição."
           git fetch origin main
           test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" || exit 0
           export ASSET_SHA="$sha"
