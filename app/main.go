@@ -199,10 +199,50 @@ setInterval(()=>fetch('/status',{cache:'no-store'}).catch(()=>{}),20000);
 })();</script>`
 var printerCloudAPI = newPrinterCloud(printerCloudURL, origin)
 
+
+// Each editing session uses an isolated working directory; IndexedDB remains the original.
+var projectSessions = struct{sync.Mutex; paths map[string]string}{paths:make(map[string]string)}
+func bambuStudioPath() string {
+ for _,root:=range []string{os.Getenv("ProgramW6432"),os.Getenv("ProgramFiles"),os.Getenv("ProgramFiles(x86)"),filepath.Join(os.Getenv("LOCALAPPDATA"),"Programs")} {
+  if root=="" {continue}
+  for _,dir:=range []string{"Bambu Studio","BambuStudio"} {
+   p:=filepath.Join(root,dir,"bambu-studio.exe"); if st,e:=os.Stat(p);e==nil&&!st.IsDir(){return p}
+  }
+ }
+ return ""
+}
+func projectExtension(name string) string {
+ ext:=strings.ToLower(filepath.Ext(name));switch ext{case ".stl",".3mf",".gcode",".obj":return ext};return ""
+}
+func projectBridge(w http.ResponseWriter,r *http.Request){
+ if !authorized(r,"X-Printei-Project")||r.Header.Get("Origin")!=origin {http.Error(w,"Acesso negado",403);return}
+ switch r.URL.Path{
+ case "/project/open":
+  ext:=projectExtension(r.URL.Query().Get("name"));if ext==""{fail(w,errors.New("Formato não suportado"));return}
+  studio:=bambuStudioPath();if studio==""{fail(w,errors.New("Bambu Studio não localizado na instalação padrão do Windows"));return}
+  root:=filepath.Join(os.Getenv("LOCALAPPDATA"),"Printei-WebView2-Test","ProjectWork");if e:=os.MkdirAll(root,0700);e!=nil{fail(w,e);return}
+  dir,e:=os.MkdirTemp(root,"edit-");if e!=nil{fail(w,e);return}
+  path:=filepath.Join(dir,"projeto"+ext);f,e:=os.OpenFile(path,os.O_WRONLY|os.O_CREATE|os.O_EXCL,0600);if e!=nil{os.RemoveAll(dir);fail(w,e);return}
+  n,e:=io.Copy(f,http.MaxBytesReader(w,r.Body,512<<20));ce:=f.Close();if e!=nil||ce!=nil||n==0{os.RemoveAll(dir);fail(w,errors.New("Arquivo vazio, inválido ou maior que 512 MB"));return}
+  cmd:=exec.Command(studio,path);if e=cmd.Start();e!=nil{os.RemoveAll(dir);fail(w,e);return};go cmd.Wait()
+  token:=filepath.Base(dir);projectSessions.Lock();projectSessions.paths[token]=dir;projectSessions.Unlock()
+  reply(w,map[string]string{"token":token,"path":path,"savePath":filepath.Join(dir,"projeto.3mf")})
+ case "/project/read":
+  token:=r.URL.Query().Get("token");projectSessions.Lock();dir:=projectSessions.paths[token];projectSessions.Unlock()
+  if dir==""{fail(w,errors.New("Sessão encerrada. Abra o projeto novamente ou importe o 3MF manualmente."));return}
+  f,e:=os.Open(filepath.Join(dir,"projeto.3mf"));if e!=nil{fail(w,errors.New("Salve o projeto como projeto.3mf na pasta de edição indicada."));return};defer f.Close()
+  st,e:=f.Stat();if e!=nil||!st.Mode().IsRegular()||st.Size()<4||st.Size()>512<<20{fail(w,errors.New("Arquivo inválido ou maior que 512 MB"));return}
+  var sig [4]byte;if _,e=io.ReadFull(f,sig[:]);e!=nil||string(sig[:])!="PK\x03\x04"{fail(w,errors.New("O arquivo não é um projeto 3MF válido"));return};if _,e=f.Seek(0,0);e!=nil{fail(w,e);return}
+  w.Header().Set("Content-Type","application/octet-stream");w.Header().Set("Content-Length",strconv.FormatInt(st.Size(),10));_,_=io.Copy(w,f)
+ default:http.NotFound(w,r)
+ }
+}
+
 func serve(w http.ResponseWriter,r *http.Request){
  if r.Host!=addr{http.Error(w,"Host inválido",403);return}
  w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("Cache-Control","no-store")
  lastSeen.Store(time.Now().Unix())
+ if strings.HasPrefix(r.URL.Path,"/project/"){projectBridge(w,r);return}
  if strings.HasPrefix(r.URL.Path,"/printer-cloud/"){printerCloudAPI.serve(w,r);return}
  switch r.URL.Path{
  case "/status":reply(w,map[string]string{"version":version,"app":"Printei"});return
